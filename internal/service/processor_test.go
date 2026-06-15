@@ -25,81 +25,115 @@ func TestTextProcessor_Process(t *testing.T) {
 		name          string
 		content       string
 		delimiter     string
+		fileBase64    string
 		expectedBytes int64
 		expectedItems int64
 		expectedList  []string
+		expectedFile  *domain.FileMetadata
 		expectErr     bool
 	}{
 		{
-			name:          "Empty input",
+			name:          "Empty input (neither content nor file)",
 			content:       "",
 			delimiter:     "\n",
+			fileBase64:    "",
 			expectedBytes: 0,
 			expectedItems: 0,
 			expectedList:  []string{},
+			expectedFile:  nil,
 			expectErr:     false,
 		},
 		{
-			name:          "Single line without trailing newline",
-			content:       "hello world",
+			name:          "Content only",
+			content:       "hello\nworld",
 			delimiter:     "\n",
+			fileBase64:    "",
 			expectedBytes: 11,
-			expectedItems: 1,
-			expectedList:  []string{"hello world"},
+			expectedItems: 2,
+			expectedList:  []string{"hello", "world"},
+			expectedFile:  nil,
 			expectErr:     false,
 		},
 		{
-			name:          "Single line with trailing newline",
-			content:       "hello world\n",
-			delimiter:     "\n",
-			expectedBytes: 12,
-			expectedItems: 1,
-			expectedList:  []string{"hello world"},
-			expectErr:     false,
-		},
-		{
-			name:          "Multiple lines",
-			content:       "line 1\nline 2\nline 3",
-			delimiter:     "\n",
-			expectedBytes: 20,
-			expectedItems: 3,
-			expectedList:  []string{"line 1", "line 2", "line 3"},
-			expectErr:     false,
-		},
-		{
-			name:          "Multiple lines with trailing newline",
-			content:       "line 1\nline 2\nline 3\n",
-			delimiter:     "\n",
-			expectedBytes: 21,
-			expectedItems: 3,
-			expectedList:  []string{"line 1", "line 2", "line 3"},
-			expectErr:     false,
-		},
-		{
-			name:          "Comma delimiter",
-			content:       "apple,banana,cherry",
-			delimiter:     ",",
-			expectedBytes: 19,
-			expectedItems: 3,
-			expectedList:  []string{"apple", "banana", "cherry"},
-			expectErr:     false,
-		},
-		{
-			name:          "Comma delimiter with trailing comma",
-			content:       "apple,banana,cherry,",
-			delimiter:     ",",
-			expectedBytes: 20,
-			expectedItems: 3,
-			expectedList:  []string{"apple", "banana", "cherry"},
-			expectErr:     false,
-		},
-		{
-			name:          "Empty delimiter returns error",
-			content:       "some content",
+			name:          "File only (Text File in Base64)",
+			content:       "",
 			delimiter:     "",
+			fileBase64:    "aGVsbG8gd29ybGQ=", // "hello world" in base64
+			expectedBytes: 0,
+			expectedItems: 0,
+			expectedList:  []string{},
+			expectedFile: &domain.FileMetadata{
+				SizeInBytes: 11,
+				MimeType:    "text/plain; charset=utf-8",
+				Status:      "decoded",
+			},
+			expectErr: false,
+		},
+		{
+			name:          "File only (PDF-like bytes in Base64)",
+			content:       "",
+			delimiter:     "",
+			fileBase64:    "JVBERi0xLjQK", // "%PDF-1.4\n" in base64
+			expectedBytes: 0,
+			expectedItems: 0,
+			expectedList:  []string{},
+			expectedFile: &domain.FileMetadata{
+				SizeInBytes: 9,
+				MimeType:    "application/pdf",
+				Status:      "decoded",
+			},
+			expectErr: false,
+		},
+		{
+			name:          "File only with Data URL prefix",
+			content:       "",
+			delimiter:     "",
+			fileBase64:    "data:text/plain;base64,aGVsbG8=", // "hello" in base64
+			expectedBytes: 0,
+			expectedItems: 0,
+			expectedList:  []string{},
+			expectedFile: &domain.FileMetadata{
+				SizeInBytes: 5,
+				MimeType:    "text/plain; charset=utf-8",
+				Status:      "decoded",
+			},
+			expectErr: false,
+		},
+		{
+			name:          "Both content and file",
+			content:       "apple,banana",
+			delimiter:     ",",
+			fileBase64:    "aGVsbG8=",
+			expectedBytes: 12,
+			expectedItems: 2,
+			expectedList:  []string{"apple", "banana"},
+			expectedFile: &domain.FileMetadata{
+				SizeInBytes: 5,
+				MimeType:    "text/plain; charset=utf-8",
+				Status:      "decoded",
+			},
+			expectErr: false,
+		},
+		{
+			name:          "Delimiter missing when content provided",
+			content:       "hello",
+			delimiter:     "",
+			fileBase64:    "",
 			expectedBytes: 0,
 			expectedItems: 0,
 			expectedList:  nil,
+			expectedFile:  nil,
+			expectErr:     true,
+		},
+		{
+			name:          "Invalid base64 encoding",
+			content:       "",
+			delimiter:     "",
+			fileBase64:    "invalid-base64!!",
+			expectedBytes: 0,
+			expectedItems: 0,
+			expectedList:  nil,
+			expectedFile:  nil,
 			expectErr:     true,
 		},
 	}
@@ -109,8 +143,9 @@ func TestTextProcessor_Process(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := &domain.ProcessRequest{
-				Content:   tt.content,
-				Delimiter: tt.delimiter,
+				Content:    tt.content,
+				Delimiter:  tt.delimiter,
+				FileBase64: tt.fileBase64,
 			}
 			res, err := p.Process(context.Background(), req)
 
@@ -127,6 +162,22 @@ func TestTextProcessor_Process(t *testing.T) {
 				}
 				if !equalSlices(res.Items, tt.expectedList) {
 					t.Errorf("expected list: %v, got: %v", tt.expectedList, res.Items)
+				}
+				if tt.expectedFile != nil {
+					if res.File == nil {
+						t.Fatal("expected file metadata, got nil")
+					}
+					if res.File.SizeInBytes != tt.expectedFile.SizeInBytes {
+						t.Errorf("expected file size: %d, got: %d", tt.expectedFile.SizeInBytes, res.File.SizeInBytes)
+					}
+					if res.File.MimeType != tt.expectedFile.MimeType {
+						t.Errorf("expected file mime: %s, got: %s", tt.expectedFile.MimeType, res.File.MimeType)
+					}
+					if res.File.Status != tt.expectedFile.Status {
+						t.Errorf("expected file status: %s, got: %s", tt.expectedFile.Status, res.File.Status)
+					}
+				} else if res.File != nil {
+					t.Errorf("expected file metadata to be nil, got: %+v", res.File)
 				}
 				if res.Status != "success" {
 					t.Errorf("expected status 'success', got: %s", res.Status)

@@ -1,15 +1,15 @@
-# API Go de Processamento de Texto com Delimitador
+# API Go de Processamento de Texto e Documentos
 
-Uma API REST desenvolvida em Go projetada com **Clean Architecture (Arquitetura Limpa)**. Esta API foi construída para receber um payload JSON contendo um texto grande não formatado e um delimitador, calculando estatísticas como contagem de bytes e total de itens separados por esse delimitador.
+Uma API REST desenvolvida em Go projetada com **Clean Architecture (Arquitetura Limpa)**. Esta API foi construída para receber um payload JSON contendo um texto grande não formatado e/ou o Base64 de um documento (PDF, DOCX, ODT, etc.), calculando estatísticas textuais e identificando metadados do arquivo decodificado.
 
 ## Arquitetura
 
 O projeto segue uma estrutura de camadas limpa:
 - **`cmd/server/`**: Ponto de entrada da aplicação. Configura o servidor HTTP com timeouts apropriados e desligamento gracioso (graceful shutdown).
 - **`internal/config/`**: Gerenciamento de configurações por variáveis de ambiente.
-- **`internal/domain/`**: Definições das entidades de negócio e interfaces (contratos) como `ProcessRequest` e `ProcessResult`.
-- **`internal/service/`**: Lógica de negócio (cálculo de bytes, contagem de itens usando o delimitador especificado).
-- **`internal/handler/`**: Controladores HTTP (validação de JSON, injeção de dependências), middlewares globais (logging estruturado e recuperação de pânicos).
+- **`internal/domain/`**: Definições das entidades de negócio e interfaces (contratos) como `ProcessRequest`, `ProcessResult` e `FileMetadata`.
+- **`internal/service/`**: Lógica de negócio (cálculo de bytes, contagem de itens, decodificação Base64 e detecção automática de MIME type).
+- **`internal/handler/`**: Controladores HTTP (validação de JSON, validação condicional dos campos obrigatórios), middlewares globais (logging estruturado e recuperação de pânicos).
 
 ## Como Executar a Aplicação
 
@@ -35,28 +35,36 @@ go test -v ./...
 ```
 
 ### Efetuando uma Requisição
-Envie uma requisição HTTP POST para `/api/v1/process` contendo o JSON com as chaves `content` e `delimiter`.
+Envie uma requisição HTTP POST para `/api/v1/process` contendo o JSON com as chaves:
+- `content`: Texto para processamento (opcional se enviar `file_base64`).
+- `delimiter`: Delimitador para divisão do texto (obrigatório se enviar `content`).
+- `file_base64`: String codificada em Base64 do arquivo de documento (opcional se enviar `content`).
 
-Exemplo usando `curl` enviando JSON:
+Exemplo usando `curl` enviando JSON com texto e arquivo Base64:
 ```bash
 curl -X POST http://localhost:8080/api/v1/process \
   -H "Content-Type: application/json" \
   -d '{
-    "content": "2026-06-15 - Leonardo: Olá\n2026-06-15 - Outro: Oi\n2026-06-15 - Leonardo: Como vai?",
-    "delimiter": "\n"
+    "content": "Linha 1\nLinha 2",
+    "delimiter": "\n",
+    "file_base64": "JVBERi0xLjQK"
   }'
 ```
 
 Retorno esperado (JSON):
 ```json
 {
-  "bytes_processed": 92,
-  "items_processed": 3,
+  "bytes_processed": 15,
+  "items_processed": 2,
   "items": [
-    "2026-06-15 - Leonardo: Olá",
-    "2026-06-15 - Outro: Oi",
-    "2026-06-15 - Leonardo: Como vai?"
+    "Linha 1",
+    "Linha 2"
   ],
+  "file": {
+    "size_in_bytes": 9,
+    "mime_type": "application/pdf",
+    "status": "decoded"
+  },
   "duration_ms": 0,
   "status": "success"
 }

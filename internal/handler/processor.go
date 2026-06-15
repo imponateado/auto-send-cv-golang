@@ -29,14 +29,24 @@ func (h *ProcessorHandler) Process(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate request fields
-	if req.Delimiter == "" {
-		respondWithError(w, http.StatusBadRequest, "Field 'delimiter' is required and cannot be empty")
+	if req.Content == "" && req.FileBase64 == "" {
+		respondWithError(w, http.StatusBadRequest, "Either 'content' or 'file_base64' must be provided")
+		return
+	}
+
+	if req.Content != "" && req.Delimiter == "" {
+		respondWithError(w, http.StatusBadRequest, "Field 'delimiter' is required when 'content' is provided")
 		return
 	}
 
 	// Call service layer with the request data
 	result, err := h.processor.Process(r.Context(), &req)
 	if err != nil {
+		// Distinguish bad base64 encoding as a Bad Request (400)
+		if err.Error() == "invalid base64 encoding" {
+			respondWithError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		respondWithError(w, http.StatusInternalServerError, "Failed to process payload: "+err.Error())
 		return
 	}
