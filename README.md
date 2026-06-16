@@ -10,6 +10,7 @@ O projeto segue uma estrutura de camadas limpa:
 - **`internal/domain/`**: Definições das entidades de negócio e interfaces (contratos) como `ProcessRequest`, `ProcessResult` e `FileMetadata`.
 - **`internal/service/`**: Lógica de negócio (cálculo de bytes, contagem de itens, decodificação Base64 e detecção automática de MIME type).
 - **`internal/handler/`**: Controladores HTTP (validação de JSON, validação condicional dos campos obrigatórios), middlewares globais (logging estruturado e recuperação de pânicos).
+- **`internal/infra/`**: Implementações reais de infraestrutura de baixo nível para e-mail (SMTP) e WhatsApp (Meta Cloud API).
 
 ## Como Executar a Aplicação
 
@@ -69,3 +70,17 @@ Retorno esperado (JSON):
   "status": "success"
 }
 ```
+
+---
+
+## Integrações Disponíveis (Para uso futuro)
+
+O projeto inclui contratos de domínio e implementações de infraestrutura isoladas para duas integrações de envio de mensagens:
+
+### 1. Envio de E-mail (SMTP)
+Implementado em [smtp.go](file:///home/leonardo/Temp/api/internal/infra/email/smtp.go) seguindo o contrato `EmailService` ([email.go](file:///home/leonardo/Temp/api/internal/domain/email.go)).
+Permite disparar e-mails utilizando servidores SMTP padrão (ex: SendGrid, Mailgun, SES, Gmail) através do pacote nativo `net/smtp`.
+
+### 2. Envio de WhatsApp (Meta Cloud API)
+Implementado em [client.go](file:///home/leonardo/Temp/api/internal/infra/whatsapp/client.go) seguindo o contrato `WhatsAppService` ([whatsapp.go](file:///home/leonardo/Temp/api/internal/domain/whatsapp.go)).
+Permite disparar mensagens HTTP POST diretamente para os endpoints oficiais da WhatsApp Cloud API da Meta.
