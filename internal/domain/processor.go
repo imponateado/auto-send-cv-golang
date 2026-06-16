@@ -24,6 +24,7 @@ type ProcessResult struct {
 	ItemsProcessed int64         `json:"items_processed"`
 	Items          []string      `json:"items"`
 	File           *FileMetadata `json:"file,omitempty"`
+	Matches        []Match       `json:"matches,omitempty"` // matches detected by Gemini
 	DurationMs     int64         `json:"duration_ms"`
 	Status         string        `json:"status"`
 }

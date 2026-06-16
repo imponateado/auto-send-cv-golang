@@ -8,17 +8,17 @@ import (
 )
 
 type ProcessorHandler struct {
-	processor domain.PayloadProcessor
+	orchestrator domain.Orchestrator
 }
 
 // NewProcessorHandler creates a new handler instance.
-func NewProcessorHandler(processor domain.PayloadProcessor) *ProcessorHandler {
+func NewProcessorHandler(orchestrator domain.Orchestrator) *ProcessorHandler {
 	return &ProcessorHandler{
-		processor: processor,
+		orchestrator: orchestrator,
 	}
 }
 
-// Process handles POST requests, decodes the JSON body, and calls the service layer.
+// Process handles POST requests, decodes the JSON body, and calls the orchestrator layer.
 func (h *ProcessorHandler) Process(w http.ResponseWriter, r *http.Request) {
 	var req domain.ProcessRequest
 
@@ -39,8 +39,8 @@ func (h *ProcessorHandler) Process(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Call service layer with the request data
-	result, err := h.processor.Process(r.Context(), &req)
+	// Call orchestrator with the request data
+	result, err := h.orchestrator.RunMatchAndDispatch(r.Context(), &req)
 	if err != nil {
 		// Distinguish bad base64 encoding as a Bad Request (400)
 		if err.Error() == "invalid base64 encoding" {

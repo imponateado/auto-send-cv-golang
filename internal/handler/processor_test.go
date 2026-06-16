@@ -12,19 +12,19 @@ import (
 	"api/internal/domain"
 )
 
-// mockProcessor implements domain.PayloadProcessor for testing handlers
-type mockProcessor struct {
-	processFn func(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error)
+// mockOrchestrator implements domain.Orchestrator for testing handlers
+type mockOrchestrator struct {
+	runFn func(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error)
 }
 
-func (m *mockProcessor) Process(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error) {
-	return m.processFn(ctx, req)
+func (m *mockOrchestrator) RunMatchAndDispatch(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error) {
+	return m.runFn(ctx, req)
 }
 
 func TestProcessorHandler_Process(t *testing.T) {
 	t.Run("Successful processing with content only", func(t *testing.T) {
-		mockProc := &mockProcessor{
-			processFn: func(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error) {
+		mockOrch := &mockOrchestrator{
+			runFn: func(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error) {
 				return &domain.ProcessResult{
 					BytesProcessed: 12,
 					ItemsProcessed: 1,
@@ -34,7 +34,7 @@ func TestProcessorHandler_Process(t *testing.T) {
 			},
 		}
 
-		h := NewProcessorHandler(mockProc)
+		h := NewProcessorHandler(mockOrch)
 		jsonReq := `{"content": "test content", "delimiter": "\n"}`
 		req := httptest.NewRequest("POST", "/api/v1/process", strings.NewReader(jsonReq))
 		w := httptest.NewRecorder()
@@ -50,8 +50,8 @@ func TestProcessorHandler_Process(t *testing.T) {
 	})
 
 	t.Run("Successful processing with file only", func(t *testing.T) {
-		mockProc := &mockProcessor{
-			processFn: func(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error) {
+		mockOrch := &mockOrchestrator{
+			runFn: func(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error) {
 				return &domain.ProcessResult{
 					BytesProcessed: 0,
 					ItemsProcessed: 0,
@@ -66,7 +66,7 @@ func TestProcessorHandler_Process(t *testing.T) {
 			},
 		}
 
-		h := NewProcessorHandler(mockProc)
+		h := NewProcessorHandler(mockOrch)
 		jsonReq := `{"file_base64": "aGVsbG8gd29ybGQ="}`
 		req := httptest.NewRequest("POST", "/api/v1/process", strings.NewReader(jsonReq))
 		w := httptest.NewRecorder()
@@ -91,7 +91,7 @@ func TestProcessorHandler_Process(t *testing.T) {
 	})
 
 	t.Run("Validation fails - both fields empty", func(t *testing.T) {
-		h := NewProcessorHandler(&mockProcessor{})
+		h := NewProcessorHandler(&mockOrchestrator{})
 		jsonReq := `{"delimiter": "\n"}`
 		req := httptest.NewRequest("POST", "/api/v1/process", strings.NewReader(jsonReq))
 		w := httptest.NewRecorder()
@@ -113,7 +113,7 @@ func TestProcessorHandler_Process(t *testing.T) {
 	})
 
 	t.Run("Validation fails - content sent but delimiter missing", func(t *testing.T) {
-		h := NewProcessorHandler(&mockProcessor{})
+		h := NewProcessorHandler(&mockOrchestrator{})
 		jsonReq := `{"content": "hello"}`
 		req := httptest.NewRequest("POST", "/api/v1/process", strings.NewReader(jsonReq))
 		w := httptest.NewRecorder()
@@ -135,13 +135,13 @@ func TestProcessorHandler_Process(t *testing.T) {
 	})
 
 	t.Run("Service returns bad base64 encoding error", func(t *testing.T) {
-		mockProc := &mockProcessor{
-			processFn: func(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error) {
+		mockOrch := &mockOrchestrator{
+			runFn: func(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error) {
 				return nil, errors.New("invalid base64 encoding")
 			},
 		}
 
-		h := NewProcessorHandler(mockProc)
+		h := NewProcessorHandler(mockOrch)
 		jsonReq := `{"file_base64": "invalid-base64!!"}`
 		req := httptest.NewRequest("POST", "/api/v1/process", strings.NewReader(jsonReq))
 		w := httptest.NewRecorder()

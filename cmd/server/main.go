@@ -12,18 +12,45 @@ import (
 
 	"api/internal/config"
 	"api/internal/handler"
+	"api/internal/infra/email"
+	"api/internal/infra/gemini"
+	"api/internal/infra/whatsapp"
 	"api/internal/service"
 )
 
 func main() {
 	log.Println("Starting API server initialization...")
 
-	// Load configuration
+	// Load configuration (loads .env automatically)
 	cfg := config.Load()
 
-	// Initialize layers (Dependency Injection)
+	// 1. Initialize Infrastructure services from environment variables
+	smtpHost := os.Getenv("SMTP_HOST")
+	smtpPort := os.Getenv("SMTP_PORT")
+	smtpUser := os.Getenv("SMTP_USERNAME")
+	smtpPass := os.Getenv("SMTP_PASSWORD")
+	smtpSender := os.Getenv("SMTP_SENDER")
+	emailService := email.NewSMTPSender(smtpHost, smtpPort, smtpUser, smtpPass, smtpSender)
+
+	waToken := os.Getenv("WHATSAPP_TOKEN")
+	waPhoneID := os.Getenv("WHATSAPP_PHONE_NUMBER_ID")
+	whatsappService := whatsapp.NewWhatsAppClient(waToken, waPhoneID)
+
+	geminiKey := os.Getenv("GEMINI_API_KEY")
+	geminiModel := os.Getenv("GEMINI_MODEL") // default: gemini-2.5-flash
+	geminiService := gemini.NewGeminiClient(geminiKey, geminiModel)
+
+	// 2. Initialize Service layers (Dependency Injection)
 	procService := service.NewTextProcessor()
-	procHandler := handler.NewProcessorHandler(procService)
+	matchingOrchestrator := service.NewOrchestrator(
+		procService,
+		geminiService,
+		emailService,
+		whatsappService,
+	)
+
+	// 3. Initialize HTTP Handler with Orchestrator
+	procHandler := handler.NewProcessorHandler(matchingOrchestrator)
 
 	// Set up router
 	mux := http.NewServeMux()
