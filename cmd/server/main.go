@@ -18,6 +18,11 @@ import (
 	"api/internal/service"
 )
 
+// @title API Go de Processamento de Texto e Documentos
+// @version 1.0
+// @description API REST em Go com Clean Architecture para processamento de textos, análise de currículos com Gemini e disparos automáticos.
+// @host localhost:8080
+// @BasePath /
 func main() {
 	log.Println("Starting API server initialization...")
 

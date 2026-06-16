@@ -19,6 +19,16 @@ func NewProcessorHandler(orchestrator domain.Orchestrator) *ProcessorHandler {
 }
 
 // Process handles POST requests, decodes the JSON body, and calls the orchestrator layer.
+// @Summary Processa texto e currículos com match inteligente e envios automáticos
+// @Description Recebe um texto bruto fatiado por delimitador e/ou um currículo em formato PDF/documento em base64. Identifica compatibilidade de vagas com Gemini e dispara notificações via e-mail e whatsapp.
+// @Tags Processador
+// @Accept json
+// @Produce json
+// @Param request body domain.ProcessRequest true "Payload de processamento"
+// @Success 200 {object} domain.ProcessResult
+// @Failure 400 {object} domain.ErrorResponse "Requisição inválida (JSON corrompido, campos obrigatórios ausentes)"
+// @Failure 500 {object} domain.ErrorResponse "Erro interno do servidor ao processar o payload"
+// @Router /api/v1/process [post]
 func (h *ProcessorHandler) Process(w http.ResponseWriter, r *http.Request) {
 	var req domain.ProcessRequest
 

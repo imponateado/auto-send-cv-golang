@@ -1,0 +1,105 @@
+basePath: /
+definitions:
+  domain.ErrorResponse:
+    properties:
+      error:
+        example: Detailed error message here
+        type: string
+      status:
+        example: error
+        type: string
+    type: object
+  domain.FileMetadata:
+    properties:
+      mime_type:
+        type: string
+      size_in_bytes:
+        type: integer
+      status:
+        type: string
+    type: object
+  domain.Match:
+    properties:
+      contact_target:
+        description: email address or phone number
+        type: string
+      contact_type:
+        description: '"email" or "whatsapp"'
+        type: string
+      index:
+        type: integer
+      reason:
+        type: string
+    type: object
+  domain.ProcessRequest:
+    properties:
+      content:
+        type: string
+      delimiter:
+        type: string
+      file_base64:
+        type: string
+    type: object
+  domain.ProcessResult:
+    properties:
+      bytes_processed:
+        type: integer
+      duration_ms:
+        type: integer
+      file:
+        $ref: '#/definitions/domain.FileMetadata'
+      items:
+        items:
+          type: string
+        type: array
+      items_processed:
+        type: integer
+      matches:
+        description: matches detected by Gemini
+        items:
+          $ref: '#/definitions/domain.Match'
+        type: array
+      status:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: API REST em Go com Clean Architecture para processamento de textos,
+    análise de currículos com Gemini e disparos automáticos.
+  title: API Go de Processamento de Texto e Documentos
+  version: "1.0"
+paths:
+  /api/v1/process:
+    post:
+      consumes:
+      - application/json
+      description: Recebe um texto bruto fatiado por delimitador e/ou um currículo
+        em formato PDF/documento em base64. Identifica compatibilidade de vagas com
+        Gemini e dispara notificações via e-mail e whatsapp.
+      parameters:
+      - description: Payload de processamento
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/domain.ProcessRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.ProcessResult'
+        "400":
+          description: Requisição inválida (JSON corrompido, campos obrigatórios ausentes)
+          schema:
+            $ref: '#/definitions/domain.ErrorResponse'
+        "500":
+          description: Erro interno do servidor ao processar o payload
+          schema:
+            $ref: '#/definitions/domain.ErrorResponse'
+      summary: Processa texto e currículos com match inteligente e envios automáticos
+      tags:
+      - Processador
+swagger: "2.0"

@@ -5,6 +5,9 @@ import (
 	"net/http"
 	"runtime/debug"
 	"time"
+
+	_ "api/docs"
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 // responseWriter wraps http.ResponseWriter to capture the status code of responses.
@@ -26,6 +29,9 @@ func (rw *responseWriter) WriteHeader(code int) {
 func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler) http.Handler {
 	// Register endpoint using Go 1.22+ ServeMux method-matching syntax
 	mux.HandleFunc("POST /api/v1/process", procHandler.Process)
+
+	// Register Swagger UI handler
+	mux.Handle("GET /swagger/", httpSwagger.WrapHandler)
 
 	var handler http.Handler = mux
 	handler = loggingMiddleware(handler)
