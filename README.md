@@ -6,7 +6,7 @@ Uma API REST desenvolvida em Go projetada com **Clean Architecture (Arquitetura 
 
 O projeto segue uma estrutura de camadas limpa:
 - **`cmd/server/`**: Ponto de entrada da aplicação. Configura o servidor HTTP com timeouts apropriados e desligamento gracioso (graceful shutdown).
-- **`internal/config/`**: Gerenciamento de configurações por variáveis de ambiente.
+- **`internal/config/`**: Gerenciamento de configurações por variáveis de ambiente. Carrega automaticamente arquivos `.env` locais em ambiente de desenvolvimento sem dependências externas.
 - **`internal/domain/`**: Definições das entidades de negócio e interfaces (contratos) como `ProcessRequest`, `ProcessResult` e `FileMetadata`.
 - **`internal/service/`**: Lógica de negócio (cálculo de bytes, contagem de itens, decodificação Base64 e detecção automática de MIME type).
 - **`internal/handler/`**: Controladores HTTP (validação de JSON, validação condicional dos campos obrigatórios), middlewares globais (logging estruturado e recuperação de pânicos).
@@ -17,15 +17,19 @@ O projeto segue uma estrutura de camadas limpa:
 ### Pré-requisitos
 - Go 1.22 ou superior instalado.
 
+### Configurando Variáveis de Ambiente (.env)
+A API suporta carregamento de variáveis através de arquivos `.env`. Copie o template padrão e preencha suas configurações:
+```bash
+cp .env.example .env
+```
+O arquivo `.env` gerado já é ignorado pelo Git por segurança.
+
 ### Iniciando o Servidor
 Para iniciar a API localmente:
 ```bash
 go run cmd/server/main.go
 ```
-Por padrão, o servidor subirá na porta `8080`. Se desejar alterar a porta, utilize a variável de ambiente `PORT`:
-```bash
-PORT=9000 go run cmd/server/main.go
-```
+Por padrão, o servidor subirá na porta `8080`. Se desejar alterar a porta, utilize a variável de ambiente `PORT` ou altere o valor no arquivo `.env`.
 
 ## Como Testar a API
 
