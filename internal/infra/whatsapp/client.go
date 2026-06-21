@@ -13,54 +13,42 @@ import (
 )
 
 type whatsAppClient struct {
-	token         string
-	phoneNumberID string
-	apiURL        string // e.g. "https://graph.facebook.com/v19.0"
-	httpClient    *http.Client
+	instanceID  string
+	token       string
+	clientToken string
+	apiURL      string // e.g. "https://api.z-api.io"
+	httpClient  *http.Client
 }
 
-// NewWhatsAppClient creates a new instance of domain.WhatsAppService pointing to Meta Cloud API.
-func NewWhatsAppClient(token, phoneNumberID string) domain.WhatsAppService {
+// NewWhatsAppClient creates a new instance of domain.WhatsAppService pointing to Z-API.
+func NewWhatsAppClient(instanceID, token, clientToken string) domain.WhatsAppService {
 	return &whatsAppClient{
-		token:         token,
-		phoneNumberID: phoneNumberID,
-		apiURL:        "https://graph.facebook.com/v19.0",
+		instanceID:  instanceID,
+		token:       token,
+		clientToken: clientToken,
+		apiURL:      "https://api.z-api.io",
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
 	}
 }
 
-type textMessagePayload struct {
-	MessagingProduct string   `json:"messaging_product"`
-	RecipientType    string   `json:"recipient_type"`
-	To               string   `json:"to"`
-	Type             string   `json:"type"`
-	Text             textBody `json:"text"`
+type zapiTextMessagePayload struct {
+	Phone   string `json:"phone"`
+	Message string `json:"message"`
 }
 
-type textBody struct {
-	PreviewURL bool   `json:"preview_url"`
-	Body       string `json:"body"`
-}
-
-// SendMessage sends a text message via Meta WhatsApp Cloud API.
+// SendMessage sends a text message via Z-API.
 func (c *whatsAppClient) SendMessage(ctx context.Context, to string, message string) error {
-	if c.token == "" || c.phoneNumberID == "" {
-		return fmt.Errorf("whatsapp client is misconfigured: token and phone_number_id are required")
+	if c.instanceID == "" || c.token == "" {
+		return fmt.Errorf("whatsapp client is misconfigured: instance_id and token are required")
 	}
 
-	url := fmt.Sprintf("%s/%s/messages", c.apiURL, c.phoneNumberID)
+	url := fmt.Sprintf("%s/instances/%s/token/%s/send-text", c.apiURL, c.instanceID, c.token)
 
-	payload := textMessagePayload{
-		MessagingProduct: "whatsapp",
-		RecipientType:    "individual",
-		To:               to,
-		Type:             "text",
-		Text: textBody{
-			PreviewURL: false,
-			Body:       message,
-		},
+	payload := zapiTextMessagePayload{
+		Phone:   to,
+		Message: message,
 	}
 
 	jsonBytes, err := json.Marshal(payload)
@@ -73,8 +61,10 @@ func (c *whatsAppClient) SendMessage(ctx context.Context, to string, message str
 		return fmt.Errorf("failed to create http request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
+	if c.clientToken != "" {
+		req.Header.Set("Client-Token", c.clientToken)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

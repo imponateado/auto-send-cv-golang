@@ -37,9 +37,10 @@ func main() {
 	smtpSender := os.Getenv("SMTP_SENDER")
 	emailService := email.NewSMTPSender(smtpHost, smtpPort, smtpUser, smtpPass, smtpSender)
 
-	waToken := os.Getenv("WHATSAPP_TOKEN")
-	waPhoneID := os.Getenv("WHATSAPP_PHONE_NUMBER_ID")
-	whatsappService := whatsapp.NewWhatsAppClient(waToken, waPhoneID)
+	zapiInstanceID := os.Getenv("ZAPI_INSTANCE_ID")
+	zapiToken := os.Getenv("ZAPI_TOKEN")
+	zapiClientToken := os.Getenv("ZAPI_CLIENT_TOKEN")
+	whatsappService := whatsapp.NewWhatsAppClient(zapiInstanceID, zapiToken, zapiClientToken)
 
 	geminiKey := os.Getenv("GEMINI_API_KEY")
 	geminiModel := os.Getenv("GEMINI_MODEL") // default: gemini-2.5-flash
