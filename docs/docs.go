@@ -166,7 +166,7 @@ var SwaggerInfo = &swag.Spec{
 	BasePath:         "/",
 	Schemes:          []string{},
 	Title:            "API Go de Processamento de Texto e Documentos",
-	Description:      "API REST em Go com Clean Architecture para processamento de textos, análise de currículos com Gemini e disparos automáticos.",
+	Description:      "API REST para processamento de textos, análise de currículos e disparos automáticos.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

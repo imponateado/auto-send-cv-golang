@@ -11,9 +11,12 @@ import (
 	"time"
 
 	"api/internal/config"
+	"api/internal/domain"
 	"api/internal/handler"
+	"api/internal/infra/deepseek"
 	"api/internal/infra/email"
 	"api/internal/infra/gemini"
+	"api/internal/infra/multillm"
 	"api/internal/infra/whatsapp"
 	"api/internal/service"
 )
@@ -26,10 +29,8 @@ import (
 func main() {
 	log.Println("Starting API server initialization...")
 
-	// Load configuration (loads .env automatically)
 	cfg := config.Load()
 
-	// 1. Initialize Infrastructure services from environment variables
 	smtpHost := os.Getenv("SMTP_HOST")
 	smtpPort := os.Getenv("SMTP_PORT")
 	smtpUser := os.Getenv("SMTP_USERNAME")
@@ -43,40 +44,50 @@ func main() {
 	whatsappService := whatsapp.NewWhatsAppClient(zapiInstanceID, zapiToken, zapiClientToken)
 
 	geminiKey := os.Getenv("GEMINI_API_KEY")
-	geminiModel := os.Getenv("GEMINI_MODEL") // default: gemini-2.5-flash
+	geminiModel := os.Getenv("GEMINI_MODEL")
 	geminiService := gemini.NewGeminiClient(geminiKey, geminiModel)
 
-	// 2. Initialize Service layers (Dependency Injection)
+	deepseekKey := os.Getenv("DEEPSEEK_API_KEY")
+	deepseekModel := os.Getenv("DEEPSEEK_MODEL")
+	deepseekService := deepseek.NewDeepSeekClient(deepseekKey, deepseekModel)
+
+	var activeLLM domain.GeminiService
+	provider := os.Getenv("LLM_PROVIDER")
+	if provider == "" {
+		provider = "fallback"
+	}
+
+	switch provider {
+	case "gemini":
+		activeLLM = geminiService
+	case "deepseek":
+		activeLLM = deepseekService
+	default: // fallback
+		activeLLM = multillm.NewFallbackLLMService(geminiService, deepseekService)
+	}
+
 	procService := service.NewTextProcessor()
 	matchingOrchestrator := service.NewOrchestrator(
 		procService,
-		geminiService,
+		activeLLM,
 		emailService,
 		whatsappService,
 	)
 
-	// 3. Initialize HTTP Handler with Orchestrator
 	procHandler := handler.NewProcessorHandler(matchingOrchestrator)
 
-	// Set up router
 	mux := http.NewServeMux()
 	router := handler.RegisterRoutes(mux, procHandler)
 
-	// Configure server
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: router,
-		// Timeout configurations:
-		ReadHeaderTimeout: 5 * time.Second,  // Protects against Slowloris attacks
-		IdleTimeout:       120 * time.Second, // Max time to keep idle connections open
-		// Note: We avoid setting http.Server.ReadTimeout to a low value
-		// to allow clients to stream large/infinite payloads slowly.
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
-	// Channel to listen for errors from the server listener
 	serverErrors := make(chan error, 1)
 
-	// Start the server in a goroutine
 	go func() {
 		log.Printf("Server listening on port %s (%s mode)...", cfg.Port, cfg.Env)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -84,11 +95,9 @@ func main() {
 		}
 	}()
 
-	// Channel to listen for OS signals (termination signals)
 	shutdownSignal := make(chan os.Signal, 1)
 	signal.Notify(shutdownSignal, os.Interrupt, syscall.SIGTERM)
 
-	// Wait for server error or termination signal
 	select {
 	case err := <-serverErrors:
 		log.Fatalf("Critical server error: %v", err)
