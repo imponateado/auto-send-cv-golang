@@ -32,7 +32,7 @@ func NewOllamaClient(apiURL, model string) domain.GeminiService {
 		apiURL: apiURL,
 		model:  model,
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second, // Vectorizing large batches locally might take some time
+			Timeout: 5 * time.Minute, // Vectorizing large batches locally might take some time
 		},
 	}
 }

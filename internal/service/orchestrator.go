@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"crypto/sha256"
 	"strings"
+	"sync"
 	"time"
 
 	"api/internal/domain"
@@ -20,6 +21,8 @@ type orchestrator struct {
 	vectorStore      domain.VectorStore   // banco vetorial (chromem-go)
 	emailService     domain.EmailService
 	whatsAppService  domain.WhatsAppService
+	tasksMu          sync.RWMutex
+	tasks            map[string]*domain.TaskStatus
 }
 
 // NewOrchestrator cria uma nova instância de orquestrador de casos de uso da aplicação.
@@ -36,6 +39,7 @@ func NewOrchestrator(
 		vectorStore:      vectorStore,
 		emailService:     emailService,
 		whatsAppService:  whatsAppService,
+		tasks:            make(map[string]*domain.TaskStatus),
 	}
 }
 
@@ -179,29 +183,39 @@ func (o *orchestrator) PopulateVacancies(ctx context.Context, content, delimiter
 		return 0, nil
 	}
 
-	log.Printf("[Orchestrator] Das %d vagas fornecidas, %d são novas. Gerando embeddings locais em lotes de 100...", len(items), len(newItems))
-	var vacancyEmbeddings [][]float32
+	batchSize := 1000
+	if batchSizeStr := os.Getenv("OLLAMA_BATCH_SIZE"); batchSizeStr != "" {
+		if val, err := strconv.Atoi(batchSizeStr); err == nil && val > 0 {
+			batchSize = val
+		}
+	}
 
-	for i := 0; i < len(newItems); i += 100 {
-		end := i + 100
+	log.Printf("[Orchestrator] Das %d vagas fornecidas, %d são novas. Gerando embeddings locais em lotes de %d...", len(items), len(newItems), batchSize)
+	itemsSaved := 0
+
+	for i := 0; i < len(newItems); i += batchSize {
+		end := i + batchSize
 		if end > len(newItems) {
 			end = len(newItems)
 		}
+		
+		batchItems := newItems[i:end]
 		log.Printf("[Orchestrator] Gerando embeddings para o lote de vagas novas %d até %d...", i, end-1)
-		embs, err := o.embeddingService.GetEmbeddings(ctx, newItems[i:end])
+		
+		embs, err := o.embeddingService.GetEmbeddings(ctx, batchItems)
 		if err != nil {
-			return 0, fmt.Errorf("failed to generate embeddings for batch %d-%d: %w", i, end-1, err)
+			return itemsSaved, fmt.Errorf("failed to generate embeddings for batch %d-%d: %w", i, end-1, err)
 		}
-		vacancyEmbeddings = append(vacancyEmbeddings, embs...)
+		
+		err = o.vectorStore.AddVacancies(ctx, batchItems, embs)
+		if err != nil {
+			return itemsSaved, fmt.Errorf("failed to add vacancies batch %d-%d to local database: %w", i, end-1, err)
+		}
+		
+		itemsSaved += len(batchItems)
 	}
 
-	// Salva apenas as novas no banco local
-	err := o.vectorStore.AddVacancies(ctx, newItems, vacancyEmbeddings)
-	if err != nil {
-		return 0, fmt.Errorf("failed to add vacancies to local database: %w", err)
-	}
-
-	return len(newItems), nil
+	return itemsSaved, nil
 }
 
 // MatchResume processa e extrai o currículo, gera o embedding e busca matches refinados via IA.
@@ -371,5 +385,58 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime string
 	}, nil
 }
 
-// RunMatchAndDispatch serve para compatibilidade com o fluxo legível de endpoint único (e também nos testes unitários).
+// PopulateVacanciesAsync gera uma tarefa em background para processar as vagas e retorna o taskID gerado.
+func (o *orchestrator) PopulateVacanciesAsync(ctx context.Context, content, delimiter string) (string, error) {
+	taskID := fmt.Sprintf("task_%d", time.Now().UnixNano())
 
+	task := &domain.TaskStatus{
+		ID:     taskID,
+		Status: "processing",
+	}
+
+	o.tasksMu.Lock()
+	o.tasks[taskID] = task
+	o.tasksMu.Unlock()
+
+	// Dispara o processamento em background usando context.Background()
+	// para que a tarefa continue rodando mesmo após a requisição HTTP original ser encerrada.
+	go func() {
+		log.Printf("[Orchestrator] Iniciando processamento em background da tarefa %s...", taskID)
+		count, err := o.PopulateVacancies(context.Background(), content, delimiter)
+
+		o.tasksMu.Lock()
+		defer o.tasksMu.Unlock()
+
+		if err != nil {
+			log.Printf("[Orchestrator] Tarefa %s falhou: %v. Vagas processadas antes do erro: %d", taskID, err, count)
+			task.Status = "failed"
+			task.Error = err.Error()
+			task.ItemsProcessed = count
+		} else {
+			log.Printf("[Orchestrator] Tarefa %s concluída com sucesso. %d vagas processadas.", taskID, count)
+			task.Status = "completed"
+			task.ItemsProcessed = count
+		}
+	}()
+
+	return taskID, nil
+}
+
+// GetTaskStatus busca o estado de processamento de uma tarefa ativa ou concluída pelo taskID.
+func (o *orchestrator) GetTaskStatus(ctx context.Context, taskID string) (*domain.TaskStatus, error) {
+	o.tasksMu.RLock()
+	defer o.tasksMu.RUnlock()
+
+	task, exists := o.tasks[taskID]
+	if !exists {
+		return nil, fmt.Errorf("task %s not found", taskID)
+	}
+
+	// Retorna uma cópia thread-safe dos dados
+	return &domain.TaskStatus{
+		ID:             task.ID,
+		Status:         task.Status,
+		ItemsProcessed: task.ItemsProcessed,
+		Error:          task.Error,
+	}, nil
+}

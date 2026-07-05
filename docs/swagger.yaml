@@ -53,6 +53,18 @@ definitions:
       status:
         type: string
     type: object
+  domain.TaskStatus:
+    properties:
+      error:
+        type: string
+      id:
+        type: string
+      items_processed:
+        type: integer
+      status:
+        description: '"processing", "completed", "failed"'
+        type: string
+    type: object
   handler.matchRequest:
     properties:
       file_base64:
@@ -106,13 +118,38 @@ paths:
       summary: Executa match de currículo contra banco de vagas
       tags:
       - Processador
+  /api/v1/tasks/{id}:
+    get:
+      description: Retorna o estado atual de processamento de uma tarefa assíncrona
+        (como a geração de embeddings de vagas).
+      parameters:
+      - description: ID da tarefa
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Informações e status da tarefa
+          schema:
+            $ref: '#/definitions/domain.TaskStatus'
+        "404":
+          description: Tarefa não encontrada
+          schema:
+            $ref: '#/definitions/domain.ErrorResponse'
+      summary: Consulta o status de uma tarefa em background
+      tags:
+      - Tarefas
   /api/v1/vacancies:
     post:
       consumes:
       - application/json
-      description: Recebe uma lista de vagas em texto bruto e um delimitador. Divide
-        o texto, gera os embeddings vetoriais via Ollama (em lote) e as salva no banco
-        vetorial local (chromem-go) de forma persistente.
+      description: Recebe uma lista de vagas em texto bruto e um delimitador. Inicia
+        a divisão do texto, gera os embeddings vetoriais via Ollama em background
+        e as salva no banco vetorial local (chromem-go). Retorna imediatamente com
+        o task_id.
       parameters:
       - description: Payload com as vagas e delimitador
         in: body
@@ -123,8 +160,8 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
-          description: Vagas salvas e indexadas com sucesso
+        "202":
+          description: Tarefa de população iniciada com sucesso
           schema:
             additionalProperties: true
             type: object
@@ -136,7 +173,7 @@ paths:
           description: Erro ao processar e salvar vagas
           schema:
             $ref: '#/definitions/domain.ErrorResponse'
-      summary: Popula o banco vetorial de vagas
+      summary: Popula o banco vetorial de vagas (Assíncrono)
       tags:
       - Vagas
   /api/v1/vacancies/clear:

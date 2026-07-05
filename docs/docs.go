@@ -61,9 +61,44 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/tasks/{id}": {
+            "get": {
+                "description": "Retorna o estado atual de processamento de uma tarefa assíncrona (como a geração de embeddings de vagas).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tarefas"
+                ],
+                "summary": "Consulta o status de uma tarefa em background",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "ID da tarefa",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Informações e status da tarefa",
+                        "schema": {
+                            "$ref": "#/definitions/domain.TaskStatus"
+                        }
+                    },
+                    "404": {
+                        "description": "Tarefa não encontrada",
+                        "schema": {
+                            "$ref": "#/definitions/domain.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/vacancies": {
             "post": {
-                "description": "Recebe uma lista de vagas em texto bruto e um delimitador. Divide o texto, gera os embeddings vetoriais via Ollama (em lote) e as salva no banco vetorial local (chromem-go) de forma persistente.",
+                "description": "Recebe uma lista de vagas em texto bruto e um delimitador. Inicia a divisão do texto, gera os embeddings vetoriais via Ollama em background e as salva no banco vetorial local (chromem-go). Retorna imediatamente com o task_id.",
                 "consumes": [
                     "application/json"
                 ],
@@ -73,7 +108,7 @@ const docTemplate = `{
                 "tags": [
                     "Vagas"
                 ],
-                "summary": "Popula o banco vetorial de vagas",
+                "summary": "Popula o banco vetorial de vagas (Assíncrono)",
                 "parameters": [
                     {
                         "description": "Payload com as vagas e delimitador",
@@ -86,8 +121,8 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "Vagas salvas e indexadas com sucesso",
+                    "202": {
+                        "description": "Tarefa de população iniciada com sucesso",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -214,6 +249,24 @@ const docTemplate = `{
                     }
                 },
                 "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "domain.TaskStatus": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "items_processed": {
+                    "type": "integer"
+                },
+                "status": {
+                    "description": "\"processing\", \"completed\", \"failed\"",
                     "type": "string"
                 }
             }

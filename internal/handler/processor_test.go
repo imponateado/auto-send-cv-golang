@@ -12,9 +12,11 @@ import (
 )
 
 type mockOrchestrator struct {
-	clearFn    func(ctx context.Context) error
-	populateFn func(ctx context.Context, content, delimiter string) (int, error)
-	matchFn    func(ctx context.Context, fileB64, fileMime string) (*domain.ProcessResult, error)
+	clearFn         func(ctx context.Context) error
+	populateFn      func(ctx context.Context, content, delimiter string) (int, error)
+	populateAsyncFn func(ctx context.Context, content, delimiter string) (string, error)
+	taskStatusFn    func(ctx context.Context, taskID string) (*domain.TaskStatus, error)
+	matchFn         func(ctx context.Context, fileB64, fileMime string) (*domain.ProcessResult, error)
 }
 
 func (m *mockOrchestrator) ClearVacancies(ctx context.Context) error {
@@ -29,6 +31,20 @@ func (m *mockOrchestrator) PopulateVacancies(ctx context.Context, content, delim
 		return m.populateFn(ctx, content, delimiter)
 	}
 	return 0, nil
+}
+
+func (m *mockOrchestrator) PopulateVacanciesAsync(ctx context.Context, content, delimiter string) (string, error) {
+	if m.populateAsyncFn != nil {
+		return m.populateAsyncFn(ctx, content, delimiter)
+	}
+	return "task_123", nil
+}
+
+func (m *mockOrchestrator) GetTaskStatus(ctx context.Context, taskID string) (*domain.TaskStatus, error) {
+	if m.taskStatusFn != nil {
+		return m.taskStatusFn(ctx, taskID)
+	}
+	return &domain.TaskStatus{ID: taskID, Status: "completed"}, nil
 }
 
 func (m *mockOrchestrator) MatchResume(ctx context.Context, fileB64, fileMime string) (*domain.ProcessResult, error) {
@@ -67,12 +83,12 @@ func TestProcessorHandler_Clear(t *testing.T) {
 }
 
 func TestProcessorHandler_Populate(t *testing.T) {
-	t.Run("Successful populate", func(t *testing.T) {
+	t.Run("Successful populate (async)", func(t *testing.T) {
 		populateCalled := false
 		mockOrch := &mockOrchestrator{
-			populateFn: func(ctx context.Context, content, delimiter string) (int, error) {
+			populateAsyncFn: func(ctx context.Context, content, delimiter string) (string, error) {
 				populateCalled = true
-				return 5, nil
+				return "task_123", nil
 			},
 		}
 
@@ -86,17 +102,59 @@ func TestProcessorHandler_Populate(t *testing.T) {
 		resp := w.Result()
 		defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("expected status 200, got: %d", resp.StatusCode)
+		if resp.StatusCode != http.StatusAccepted {
+			t.Errorf("expected status 202, got: %d", resp.StatusCode)
 		}
 		if !populateCalled {
-			t.Error("expected PopulateVacancies to be called on orchestrator")
+			t.Error("expected PopulateVacanciesAsync to be called on orchestrator")
 		}
 
 		var res map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&res)
-		if res["status"] != "success" || res["items_processed"] != float64(5) {
+		if res["status"] != "accepted" || res["task_id"] != "task_123" {
 			t.Errorf("unexpected response content: %v", res)
+		}
+	})
+}
+
+func TestProcessorHandler_GetTaskStatus(t *testing.T) {
+	t.Run("Successful get task status", func(t *testing.T) {
+		statusCalled := false
+		mockOrch := &mockOrchestrator{
+			taskStatusFn: func(ctx context.Context, taskID string) (*domain.TaskStatus, error) {
+				statusCalled = true
+				if taskID != "task_999" {
+					t.Errorf("expected task_999, got %s", taskID)
+				}
+				return &domain.TaskStatus{
+					ID:             "task_999",
+					Status:         "completed",
+					ItemsProcessed: 3,
+				}, nil
+			},
+		}
+
+		h := NewProcessorHandler(mockOrch)
+		req := httptest.NewRequest("GET", "/api/v1/tasks/task_999", nil)
+		req.SetPathValue("id", "task_999")
+		w := httptest.NewRecorder()
+
+		h.GetTaskStatus(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected status 200, got: %d", resp.StatusCode)
+		}
+		if !statusCalled {
+			t.Error("expected GetTaskStatus to be called on orchestrator")
+		}
+
+		var res domain.TaskStatus
+		json.NewDecoder(resp.Body).Decode(&res)
+		if res.ID != "task_999" || res.Status != "completed" || res.ItemsProcessed != 3 {
+			t.Errorf("unexpected task response: %+v", res)
 		}
 	})
 }

@@ -47,13 +47,13 @@ type populateRequest struct {
 }
 
 // Populate handles POST /api/v1/vacancies
-// @Summary Popula o banco vetorial de vagas
-// @Description Recebe uma lista de vagas em texto bruto e um delimitador. Divide o texto, gera os embeddings vetoriais via Ollama (em lote) e as salva no banco vetorial local (chromem-go) de forma persistente.
+// @Summary Popula o banco vetorial de vagas (Assíncrono)
+// @Description Recebe uma lista de vagas em texto bruto e um delimitador. Inicia a divisão do texto, gera os embeddings vetoriais via Ollama em background e as salva no banco vetorial local (chromem-go). Retorna imediatamente com o task_id.
 // @Tags Vagas
 // @Accept json
 // @Produce json
 // @Param request body populateRequest true "Payload com as vagas e delimitador"
-// @Success 200 {object} map[string]interface{} "Vagas salvas e indexadas com sucesso"
+// @Success 202 {object} map[string]interface{} "Tarefa de população iniciada com sucesso"
 // @Failure 400 {object} domain.ErrorResponse "Requisição inválida"
 // @Failure 500 {object} domain.ErrorResponse "Erro ao processar e salvar vagas"
 // @Router /api/v1/vacancies [post]
@@ -73,17 +73,42 @@ func (h *ProcessorHandler) Populate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	count, err := h.orchestrator.PopulateVacancies(r.Context(), req.Content, req.Delimiter)
+	taskID, err := h.orchestrator.PopulateVacanciesAsync(r.Context(), req.Content, req.Delimiter)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to populate database: "+err.Error())
+		respondWithError(w, http.StatusInternalServerError, "Failed to start database population: "+err.Error())
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, map[string]interface{}{
-		"status":          "success",
-		"items_processed": count,
-		"message":         "Vacancies database populated successfully",
+	respondWithJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "accepted",
+		"task_id": taskID,
+		"message": "Vacancies processing started in background",
 	})
+}
+
+// GetTaskStatus handles GET /api/v1/tasks/{id}
+// @Summary Consulta o status de uma tarefa em background
+// @Description Retorna o estado atual de processamento de uma tarefa assíncrona (como a geração de embeddings de vagas).
+// @Tags Tarefas
+// @Produce json
+// @Param id path string true "ID da tarefa"
+// @Success 200 {object} domain.TaskStatus "Informações e status da tarefa"
+// @Failure 404 {object} domain.ErrorResponse "Tarefa não encontrada"
+// @Router /api/v1/tasks/{id} [get]
+func (h *ProcessorHandler) GetTaskStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		respondWithError(w, http.StatusBadRequest, "Task ID is required")
+		return
+	}
+
+	task, err := h.orchestrator.GetTaskStatus(r.Context(), id)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, task)
 }
 
 type matchRequest struct {

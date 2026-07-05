@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# send.sh — Envia requisição para a API de Processamento (Nova Arquitetura)
+# send.sh — Envia requisição para a API de Processamento (Nova Arquitetura Assíncrona)
 #
 # Uso:
 #   bash send.sh <comando> [argumentos]
@@ -59,6 +59,44 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Função de polling para acompanhar progresso das tarefas assíncronas do servidor
+poll_task() {
+  local TASK_ID="$1"
+  if [ -z "$TASK_ID" ] || [ "$TASK_ID" = "null" ]; then
+    echo -e "${RED}Erro: ID de tarefa inválido recebido.${NC}"
+    exit 1
+  fi
+
+  echo -e "Tarefa registrada no servidor: ID = ${YELLOW}$TASK_ID${NC}"
+  echo -n "Processando vagas em background "
+
+  while true; do
+    local STATUS_RESP
+    STATUS_RESP=$(curl -s "$BASE_URL/api/v1/tasks/$TASK_ID")
+    local STATUS
+    STATUS=$(echo "$STATUS_RESP" | jq -r '.status // empty')
+
+    if [ "$STATUS" = "completed" ]; then
+      local ITEMS
+      ITEMS=$(echo "$STATUS_RESP" | jq -r '.items_processed')
+      echo -e "\n${GREEN}✓ Processamento concluído! Novas vagas indexadas: $ITEMS${NC}\n"
+      return 0
+    elif [ "$STATUS" = "failed" ]; then
+      local ERR
+      ERR=$(echo "$STATUS_RESP" | jq -r '.error')
+      echo -e "\n${RED}✗ Erro no processamento da tarefa: $ERR${NC}\n"
+      exit 1
+    elif [ "$STATUS" = "processing" ]; then
+      echo -n "."
+      sleep 2
+    else
+      echo -e "\n${RED}Status desconhecido: '$STATUS'. Resposta:${NC}"
+      echo "$STATUS_RESP"
+      exit 1
+    fi
+  done
+}
+
 case "$COMMAND" in
   clear)
     echo -e "\n${CYAN}========================================${NC}"
@@ -93,11 +131,18 @@ case "$COMMAND" in
       --arg delimiter "$DELIMITER" \
       '{content: $content, delimiter: $delimiter}' > "$PAYLOAD_VACANCIES"
 
-    curl -s -X POST "$BASE_URL/api/v1/vacancies" \
+    RESPONSE=$(curl -s -X POST "$BASE_URL/api/v1/vacancies" \
       -H "Content-Type: application/json" \
-      -d @"$PAYLOAD_VACANCIES" \
-      | jq . 2>/dev/null || cat
-    echo -e "\n${GREEN}✓ Vagas cadastradas e indexadas!${NC}\n"
+      -d @"$PAYLOAD_VACANCIES")
+
+    TASK_ID=$(echo "$RESPONSE" | jq -r '.task_id // empty')
+    if [ -z "$TASK_ID" ] || [ "$TASK_ID" = "null" ]; then
+      echo -e "${RED}Erro ao iniciar tarefa de população:${NC}"
+      echo "$RESPONSE" | jq . 2>/dev/null || echo "$RESPONSE"
+      exit 1
+    fi
+
+    poll_task "$TASK_ID"
     ;;
 
   match)
@@ -154,16 +199,25 @@ case "$COMMAND" in
     curl -s -X POST "$BASE_URL/api/v1/vacancies/clear" | jq . 2>/dev/null || cat
 
     # 2. Populate
-    echo -e "\n${CYAN}[2/3] Cadastrando e indexando vagas...${NC}"
+    echo -e "\n${CYAN}[2/3] Iniciando cadastro e indexação de vagas...${NC}"
     PAYLOAD_VACANCIES="$TMP_DIR/payload_vacancies.json"
     jq -n \
       --rawfile content "$TEXTO_FILE" \
       --arg delimiter "$DELIMITER" \
       '{content: $content, delimiter: $delimiter}' > "$PAYLOAD_VACANCIES"
-    curl -s -X POST "$BASE_URL/api/v1/vacancies" \
+    
+    RESPONSE=$(curl -s -X POST "$BASE_URL/api/v1/vacancies" \
       -H "Content-Type: application/json" \
-      -d @"$PAYLOAD_VACANCIES" \
-      | jq . 2>/dev/null || cat
+      -d @"$PAYLOAD_VACANCIES")
+
+    TASK_ID=$(echo "$RESPONSE" | jq -r '.task_id // empty')
+    if [ -z "$TASK_ID" ] || [ "$TASK_ID" = "null" ]; then
+      echo -e "${RED}Erro ao iniciar tarefa de população:${NC}"
+      echo "$RESPONSE" | jq . 2>/dev/null || echo "$RESPONSE"
+      exit 1
+    fi
+
+    poll_task "$TASK_ID"
 
     # 3. Match
     echo -e "\n${CYAN}[3/3] Executando o match do currículo...${NC}"

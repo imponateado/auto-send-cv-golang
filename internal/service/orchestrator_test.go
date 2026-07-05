@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"testing"
+	"time"
 
 	"api/internal/domain"
 )
@@ -217,6 +218,37 @@ func TestOrchestrator_Methods(t *testing.T) {
 		}
 		if waCalls != 1 {
 			t.Errorf("expected 1 whatsapp call, got: %d", waCalls)
+		}
+	})
+
+	t.Run("PopulateVacanciesAsync starts task and GetTaskStatus retrieves it", func(t *testing.T) {
+		mStore := &mockVectorStore{
+			addVacanciesFn: func(ctx context.Context, vacancies []string, embeddings [][]float32) error {
+				return nil
+			},
+		}
+
+		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockEmail{}, &mockWhatsApp{})
+		taskID, err := orch.PopulateVacanciesAsync(context.Background(), "vaga 1---vaga 2", "---")
+		if err != nil {
+			t.Fatalf("unexpected error starting task: %v", err)
+		}
+		if taskID == "" {
+			t.Fatal("expected non-empty task ID")
+		}
+
+		// Wait slightly for the goroutine to run
+		time.Sleep(50 * time.Millisecond)
+
+		status, err := orch.GetTaskStatus(context.Background(), taskID)
+		if err != nil {
+			t.Fatalf("unexpected error fetching status: %v", err)
+		}
+		if status.ID != taskID {
+			t.Errorf("expected task ID %s, got %s", taskID, status.ID)
+		}
+		if status.Status != "completed" && status.Status != "processing" {
+			t.Errorf("unexpected task status: %s", status.Status)
 		}
 	})
 }

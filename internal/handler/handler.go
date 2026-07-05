@@ -31,6 +31,7 @@ func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler) http.Hand
 	mux.HandleFunc("POST /api/v1/vacancies/clear", procHandler.Clear)
 	mux.HandleFunc("POST /api/v1/vacancies", procHandler.Populate)
 	mux.HandleFunc("POST /api/v1/match", procHandler.Match)
+	mux.HandleFunc("GET /api/v1/tasks/{id}", procHandler.GetTaskStatus)
 
 	// Register Swagger UI handler
 	mux.Handle("GET /swagger/", httpSwagger.WrapHandler)
