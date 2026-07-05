@@ -163,7 +163,7 @@ func (o *orchestrator) PopulateVacancies(ctx context.Context, content, delimiter
 		if trimmed == "" {
 			continue
 		}
-		hash := sha256.Sum256([]byte(item))
+		hash := sha256.Sum256([]byte(trimmed))
 		hashStr := fmt.Sprintf("vac_%x", hash)
 
 		exists, err := o.vectorStore.HasVacancy(ctx, hashStr)

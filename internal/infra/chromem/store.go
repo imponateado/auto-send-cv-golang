@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log"
+	"strings"
 
 	"api/internal/domain"
 
@@ -74,7 +75,8 @@ func (s *chromemStore) AddVacancies(ctx context.Context, vacancies []string, emb
 	ids := make([]string, len(vacancies))
 	metadatas := make([]map[string]string, len(vacancies))
 	for i, vacancy := range vacancies {
-		hash := sha256.Sum256([]byte(vacancy))
+		trimmed := strings.TrimSpace(vacancy)
+		hash := sha256.Sum256([]byte(trimmed))
 		ids[i] = fmt.Sprintf("vac_%x", hash)
 		metadatas[i] = map[string]string{
 			"index": fmt.Sprintf("%d", i),
