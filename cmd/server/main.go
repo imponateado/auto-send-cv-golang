@@ -13,10 +13,12 @@ import (
 	"api/internal/config"
 	"api/internal/domain"
 	"api/internal/handler"
+	"api/internal/infra/chromem"
 	"api/internal/infra/deepseek"
 	"api/internal/infra/email"
 	"api/internal/infra/gemini"
 	"api/internal/infra/multillm"
+	"api/internal/infra/ollama"
 	"api/internal/infra/whatsapp"
 	"api/internal/service"
 )
@@ -51,6 +53,15 @@ func main() {
 	deepseekModel := os.Getenv("DEEPSEEK_MODEL")
 	deepseekService := deepseek.NewDeepSeekClient(deepseekKey, deepseekModel)
 
+	ollamaURL := os.Getenv("OLLAMA_API_URL")
+	ollamaModel := os.Getenv("OLLAMA_MODEL")
+	ollamaService := ollama.NewOllamaClient(ollamaURL, ollamaModel)
+
+	vectorStore, err := chromem.NewChromemStore("./db")
+	if err != nil {
+		log.Fatalf("Failed to initialize chromem vector store: %v", err)
+	}
+
 	var activeLLM domain.GeminiService
 	provider := os.Getenv("LLM_PROVIDER")
 	if provider == "" {
@@ -66,11 +77,10 @@ func main() {
 		activeLLM = multillm.NewFallbackLLMService(geminiService, deepseekService)
 	}
 
-	procService := service.NewTextProcessor()
 	matchingOrchestrator := service.NewOrchestrator(
-		procService,
 		activeLLM,
-		geminiService, // Always use Gemini for embeddings
+		ollamaService,
+		vectorStore, // Local Vector Database (chromem-go)
 		emailService,
 		whatsappService,
 	)

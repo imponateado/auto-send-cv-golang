@@ -31,15 +31,6 @@ definitions:
       reason:
         type: string
     type: object
-  domain.ProcessRequest:
-    properties:
-      content:
-        type: string
-      delimiter:
-        type: string
-      file_base64:
-        type: string
-    type: object
   domain.ProcessResult:
     properties:
       bytes_processed:
@@ -62,6 +53,18 @@ definitions:
       status:
         type: string
     type: object
+  handler.matchRequest:
+    properties:
+      file_base64:
+        type: string
+    type: object
+  handler.populateRequest:
+    properties:
+      content:
+        type: string
+      delimiter:
+        type: string
+    type: object
 host: localhost:8080
 info:
   contact: {}
@@ -70,36 +73,90 @@ info:
   title: API Go de Processamento de Texto e Documentos
   version: "1.0"
 paths:
-  /api/v1/process:
+  /api/v1/match:
     post:
       consumes:
       - application/json
-      description: Recebe um texto bruto fatiado por delimitador e/ou um currículo
-        em formato PDF/documento em base64. Identifica compatibilidade de vagas com
-        Gemini e dispara notificações via e-mail e whatsapp.
+      description: Recebe apenas o currículo do candidato em base64. Gera o embedding
+        vetorial do currículo, executa a busca de similaridade rápida no banco local
+        (chromem-go) e envia as vagas compatíveis para triagem detalhada via LLM (Gemini/DeepSeek),
+        realizando também os disparos automáticos.
       parameters:
-      - description: Payload de processamento
+      - description: Payload contendo apenas o currículo base64
         in: body
         name: request
         required: true
         schema:
-          $ref: '#/definitions/domain.ProcessRequest'
+          $ref: '#/definitions/handler.matchRequest'
       produces:
       - application/json
       responses:
         "200":
-          description: OK
+          description: Resultado da busca vetorial e envios automáticos
           schema:
             $ref: '#/definitions/domain.ProcessResult'
         "400":
-          description: Requisição inválida (JSON corrompido, campos obrigatórios ausentes)
+          description: Requisição inválida
           schema:
             $ref: '#/definitions/domain.ErrorResponse'
         "500":
-          description: Erro interno do servidor ao processar o payload
+          description: Erro ao extrair, buscar ou enviar candidaturas
           schema:
             $ref: '#/definitions/domain.ErrorResponse'
-      summary: Processa texto e currículos com match inteligente e envios automáticos
+      summary: Executa match de currículo contra banco de vagas
       tags:
       - Processador
+  /api/v1/vacancies:
+    post:
+      consumes:
+      - application/json
+      description: Recebe uma lista de vagas em texto bruto e um delimitador. Divide
+        o texto, gera os embeddings vetoriais via Ollama (em lote) e as salva no banco
+        vetorial local (chromem-go) de forma persistente.
+      parameters:
+      - description: Payload com as vagas e delimitador
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handler.populateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Vagas salvas e indexadas com sucesso
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Requisição inválida
+          schema:
+            $ref: '#/definitions/domain.ErrorResponse'
+        "500":
+          description: Erro ao processar e salvar vagas
+          schema:
+            $ref: '#/definitions/domain.ErrorResponse'
+      summary: Popula o banco vetorial de vagas
+      tags:
+      - Vagas
+  /api/v1/vacancies/clear:
+    post:
+      description: Remove todas as vagas e coleções existentes no banco de dados local
+        do chromem-go.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Banco vetorial de vagas limpo com sucesso
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Erro interno ao limpar banco vetorial
+          schema:
+            $ref: '#/definitions/domain.ErrorResponse'
+      summary: Limpa o banco de dados vetorial de vagas
+      tags:
+      - Vagas
 swagger: "2.0"

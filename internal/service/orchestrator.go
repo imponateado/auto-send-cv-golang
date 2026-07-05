@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"strconv"
+	"crypto/sha256"
 	"strings"
 	"time"
 
@@ -14,25 +15,25 @@ import (
 )
 
 type orchestrator struct {
-	processor        domain.PayloadProcessor
 	geminiService    domain.GeminiService // matching service (Gemini or DeepSeek)
-	embeddingService domain.GeminiService // embedding service (always Gemini)
+	embeddingService domain.GeminiService // embedding service (Ollama)
+	vectorStore      domain.VectorStore   // banco vetorial (chromem-go)
 	emailService     domain.EmailService
 	whatsAppService  domain.WhatsAppService
 }
 
-// NewOrchestrator creates a new application use case orchestrator.
+// NewOrchestrator cria uma nova instância de orquestrador de casos de uso da aplicação.
 func NewOrchestrator(
-	processor domain.PayloadProcessor,
 	geminiService domain.GeminiService,
 	embeddingService domain.GeminiService,
+	vectorStore domain.VectorStore,
 	emailService domain.EmailService,
 	whatsAppService domain.WhatsAppService,
 ) domain.Orchestrator {
 	return &orchestrator{
-		processor:        processor,
 		geminiService:    geminiService,
 		embeddingService: embeddingService,
+		vectorStore:      vectorStore,
 		emailService:     emailService,
 		whatsAppService:  whatsAppService,
 	}
@@ -93,7 +94,7 @@ func writeExecutionLog(filename string, startTime time.Time, processedCount int6
 			builder.WriteString(fmt.Sprintf("- Justificativa da LLM: %s\n", r.match.Reason))
 			builder.WriteString(fmt.Sprintf("- Status de Envio: %s\n", r.status))
 			
-			// Find vacancy text from scores slice
+			// Localiza o texto da vaga no slice de scores
 			var vacText string
 			for _, s := range scores {
 				if s.Index == r.match.Index {
@@ -127,87 +128,119 @@ func cosineSimilarity(a, b []float32) float32 {
 	return float32(dotProduct / (math.Sqrt(normA) * math.Sqrt(normB)))
 }
 
-func (o *orchestrator) RunMatchAndDispatch(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error) {
-	start := time.Now()
-	logFilename := fmt.Sprintf("log_%s.txt", start.Format("2006-01-02_15-04-05"))
-	log.Printf("[Orchestrator] Starting match and dispatch process. Log file will be: %s", logFilename)
+// ClearVacancies limpa a tabela local do banco vetorial.
+func (o *orchestrator) ClearVacancies(ctx context.Context) error {
+	return o.vectorStore.Clear(ctx)
+}
 
-	// 1. Process the payload (Split vacancies and check resume metadata)
-	res, err := o.processor.Process(ctx, req)
-	if err != nil {
-		log.Printf("[Orchestrator] Payload processing failed: %v", err)
-		return nil, err
+// PopulateVacancies processa o texto bruto, fatia pelo delimitador, gera os embeddings das novas vagas e as insere no banco local.
+func (o *orchestrator) PopulateVacancies(ctx context.Context, content, delimiter string) (int, error) {
+	if content == "" {
+		return 0, fmt.Errorf("content cannot be empty")
+	}
+	if delimiter == "" {
+		return 0, fmt.Errorf("delimiter cannot be empty")
 	}
 
-	// 2. We can only perform matching if both the resume and the vacancies list are provided
-	if req.FileBase64 == "" || len(res.Items) == 0 {
-		res.DurationMs = time.Since(start).Milliseconds()
+	// Fatia as vagas pelo delimitador
+	items := strings.Split(content, delimiter)
+	if len(items) > 0 && items[len(items)-1] == "" {
+		items = items[:len(items)-1]
+	}
 
-		reason := "Matching ignorado: currículo ou lista de vagas não fornecido."
-		if req.FileBase64 == "" && len(res.Items) > 0 {
-			reason = fmt.Sprintf("Matching ignorado: currículo não fornecido (vagas processadas: %d).", len(res.Items))
-		} else if req.FileBase64 != "" && len(res.Items) == 0 {
-			reason = "Matching ignorado: lista de vagas não fornecida (currículo carregado)."
+	if len(items) == 0 {
+		return 0, nil
+	}
+
+	// Filtra vagas que ainda não estão no banco local usando hash SHA256 do conteúdo
+	var newItems []string
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		hash := sha256.Sum256([]byte(item))
+		hashStr := fmt.Sprintf("vac_%x", hash)
+
+		exists, err := o.vectorStore.HasVacancy(ctx, hashStr)
+		if err != nil {
+			log.Printf("[Orchestrator] Erro ao verificar existência da vaga: %v", err)
+			newItems = append(newItems, item)
+			continue
 		}
 
-		log.Printf("[Orchestrator] Skipping matching. Reason: %s", reason)
-		_ = writeExecutionLog(logFilename, start, res.ItemsProcessed, 0, nil, nil, reason)
-		return res, nil
+		if !exists {
+			newItems = append(newItems, item)
+		}
 	}
 
-	// Get file mime type
-	mimeType := "application/pdf"
-	if res.File != nil && res.File.MimeType != "" {
-		mimeType = res.File.MimeType
+	if len(newItems) == 0 {
+		log.Println("[Orchestrator] Todas as vagas fornecidas já existem no banco de dados local. Pulando geração de embeddings.")
+		return 0, nil
 	}
 
-	// 3. Extract text from resume PDF/Document
-	log.Printf("[Orchestrator] Extracting text from candidate's resume (MIME: %s)...", mimeType)
-	resumeText, err := o.geminiService.ExtractText(ctx, req.FileBase64, mimeType)
+	log.Printf("[Orchestrator] Das %d vagas fornecidas, %d são novas. Gerando embeddings locais em lotes de 100...", len(items), len(newItems))
+	var vacancyEmbeddings [][]float32
+
+	for i := 0; i < len(newItems); i += 100 {
+		end := i + 100
+		if end > len(newItems) {
+			end = len(newItems)
+		}
+		log.Printf("[Orchestrator] Gerando embeddings para o lote de vagas novas %d até %d...", i, end-1)
+		embs, err := o.embeddingService.GetEmbeddings(ctx, newItems[i:end])
+		if err != nil {
+			return 0, fmt.Errorf("failed to generate embeddings for batch %d-%d: %w", i, end-1, err)
+		}
+		vacancyEmbeddings = append(vacancyEmbeddings, embs...)
+	}
+
+	// Salva apenas as novas no banco local
+	err := o.vectorStore.AddVacancies(ctx, newItems, vacancyEmbeddings)
 	if err != nil {
-		log.Printf("[Orchestrator] Resume text extraction failed: %v", err)
-		_ = writeExecutionLog(logFilename, start, res.ItemsProcessed, 0, nil, nil, fmt.Sprintf("Erro ao extrair texto do currículo: %v", err))
+		return 0, fmt.Errorf("failed to add vacancies to local database: %w", err)
+	}
+
+	return len(newItems), nil
+}
+
+// MatchResume processa e extrai o currículo, gera o embedding e busca matches refinados via IA.
+func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime string) (*domain.ProcessResult, error) {
+	start := time.Now()
+	logFilename := fmt.Sprintf("log_%s.txt", start.Format("2006-01-02_15-04-05"))
+	log.Printf("[Orchestrator] Iniciando matching do currículo. Log salvo em: %s", logFilename)
+
+	if fileMime == "" {
+		fileMime = "application/pdf"
+	}
+
+	// 1. Extrai texto do currículo em PDF/Documento
+	log.Printf("[Orchestrator] Extraindo texto do currículo (MIME: %s)...", fileMime)
+	resumeText, err := o.geminiService.ExtractText(ctx, fileB64, fileMime)
+	if err != nil {
+		log.Printf("[Orchestrator] Falha ao extrair texto do currículo: %v", err)
+		_ = writeExecutionLog(logFilename, start, 0, 0, nil, nil, fmt.Sprintf("Erro ao extrair texto do currículo: %v", err))
 		return nil, fmt.Errorf("failed to extract resume text: %w", err)
 	}
-	
+
 	resumePreview := resumeText
 	if len(resumePreview) > 200 {
 		resumePreview = resumePreview[:200] + "..."
 	}
-	log.Printf("[Orchestrator] Resume text extracted successfully (%d characters). Preview:\n%s", len(resumeText), resumePreview)
+	log.Printf("[Orchestrator] Texto do currículo extraído (%d caracteres). Preview:\n%s", len(resumeText), resumePreview)
 
-	// 4. Generate embeddings for candidate resume
-	log.Println("[Orchestrator] Requesting embedding for candidate's resume...")
+	// 2. Gera embedding para o currículo
+	log.Println("[Orchestrator] Solicitando embedding para o currículo...")
 	resumeEmbs, err := o.embeddingService.GetEmbeddings(ctx, []string{resumeText})
 	if err != nil || len(resumeEmbs) == 0 {
-		log.Printf("[Orchestrator] Failed to get resume embedding: %v", err)
-		_ = writeExecutionLog(logFilename, start, res.ItemsProcessed, 0, nil, nil, fmt.Sprintf("Erro ao obter embedding do currículo: %v", err))
+		log.Printf("[Orchestrator] Falha ao gerar embedding do currículo: %v", err)
+		_ = writeExecutionLog(logFilename, start, 0, 0, nil, nil, fmt.Sprintf("Erro ao obter embedding do currículo: %v", err))
 		return nil, fmt.Errorf("failed to get resume embedding: %w", err)
 	}
 	resumeEmbedding := resumeEmbs[0]
-	log.Printf("[Orchestrator] Resume embedding computed successfully (dimensions: %d).", len(resumeEmbedding))
+	log.Printf("[Orchestrator] Embedding do currículo gerado com sucesso (dimensões: %d).", len(resumeEmbedding))
 
-	// 5. Generate embeddings for vacancies in batches of 100
-	log.Printf("[Orchestrator] Requesting embeddings for %d vacancies in batches...", len(res.Items))
-	var vacancyEmbeddings [][]float32
-	batchSize := 100
-	for i := 0; i < len(res.Items); i += batchSize {
-		end := i + batchSize
-		if end > len(res.Items) {
-			end = len(res.Items)
-		}
-		log.Printf("[Orchestrator] Fetching embeddings for vacancies index %d to %d...", i, end-1)
-		embs, err := o.embeddingService.GetEmbeddings(ctx, res.Items[i:end])
-		if err != nil {
-			log.Printf("[Orchestrator] Failed to get embeddings for vacancies batch %d-%d: %v", i, end-1, err)
-			_ = writeExecutionLog(logFilename, start, res.ItemsProcessed, 0, nil, nil, fmt.Sprintf("Erro ao obter embeddings das vagas: %v", err))
-			return nil, fmt.Errorf("failed to get vacancy embeddings: %w", err)
-		}
-		vacancyEmbeddings = append(vacancyEmbeddings, embs...)
-	}
-	log.Printf("[Orchestrator] Successfully collected embeddings for all %d vacancies.", len(vacancyEmbeddings))
-
-	// 6. Pre-filter vacancies using Cosine Similarity threshold in memory
+	// 3. Lê o threshold do ambiente
 	thresholdStr := os.Getenv("EMBEDDING_THRESHOLD")
 	threshold := float32(0.35)
 	if thresholdStr != "" {
@@ -216,114 +249,106 @@ func (o *orchestrator) RunMatchAndDispatch(ctx context.Context, req *domain.Proc
 		}
 	}
 
-	log.Printf("[Orchestrator] Starting Cosine Similarity pre-filtering (threshold >= %.2f)...", threshold)
-	type filteredVacancy struct {
-		originalIndex int
-		text          string
-		score         float32
-	}
-	var filtered []filteredVacancy
-	var scores []vacancyScore
-
-	for idx, vacEmb := range vacancyEmbeddings {
-		score := cosineSimilarity(resumeEmbedding, vacEmb)
-		passed := score >= threshold
-		scores = append(scores, vacancyScore{
-			Index:  idx,
-			Score:  score,
-			Passed: passed,
-			Text:   res.Items[idx],
-		})
-		
-		log.Printf("[Orchestrator] Similarity check - Vaga %d: Cosseno=%.4f (Passou=%t)", idx, score, passed)
-		
-		if passed {
-			filtered = append(filtered, filteredVacancy{
-				originalIndex: idx,
-				text:          res.Items[idx],
-				score:         score,
-			})
-		}
-	}
-
-	log.Printf("[Orchestrator] Similarity pre-filtering completed: keeping %d out of %d vacancies.", len(filtered), len(res.Items))
-
-	// 7. If no vacancies met the threshold, write empty match report and return early
-	if len(filtered) == 0 {
-		reason := fmt.Sprintf("Nenhuma vaga compatível com o limite de similaridade semântica (threshold: %.2f).", threshold)
-		log.Printf("[Orchestrator] Early return: %s", reason)
-		_ = writeExecutionLog(logFilename, start, res.ItemsProcessed, 0, nil, scores, reason)
-		res.DurationMs = time.Since(start).Milliseconds()
-		res.Matches = []domain.Match{}
-		return res, nil
-	}
-
-	// 8. Extract job texts to send for LLM validation
-	filteredTexts := make([]string, len(filtered))
-	for i, f := range filtered {
-		filteredTexts[i] = f.text
-	}
-
-	// 9. Request match confirmation, contact extraction, and justifications from LLM
-	log.Printf("[Orchestrator] Invoking LLM validator on the %d pre-filtered vacancies...", len(filtered))
-	matchRes, err := o.geminiService.MatchResume(ctx, req.FileBase64, mimeType, filteredTexts)
+	// 4. Busca vagas similares no banco local usando o threshold
+	matchedVacancies, err := o.vectorStore.SearchSimilarity(ctx, resumeEmbedding, 10, threshold)
 	if err != nil {
-		log.Printf("[Orchestrator] LLM validation matching failed: %v", err)
-		_ = writeExecutionLog(logFilename, start, res.ItemsProcessed, 0, nil, scores, fmt.Sprintf("Erro no refino de matching LLM: %v", err))
-		return nil, fmt.Errorf("gemini matching failed: %w", err)
+		log.Printf("[Orchestrator] Erro na busca vetorial local: %v", err)
+		_ = writeExecutionLog(logFilename, start, 0, 0, nil, nil, fmt.Sprintf("Erro na busca de similaridade: %v", err))
+		return nil, fmt.Errorf("failed to search similar vacancies: %w", err)
 	}
 
-	// 10. Map indices returned by LLM back to original indexes in res.Items
+	// 5. Se nenhuma vaga passou pelo filtro, retorna antecipadamente
+	if len(matchedVacancies) == 0 {
+		reason := fmt.Sprintf("Nenhuma vaga compatível com o limite de similaridade semântica (threshold: %.2f).", threshold)
+		log.Printf("[Orchestrator] Fim de fluxo precoce: %s", reason)
+		_ = writeExecutionLog(logFilename, start, 0, 0, nil, nil, reason)
+		return &domain.ProcessResult{
+			Status:     "success",
+			Matches:    []domain.Match{},
+			DurationMs: time.Since(start).Milliseconds(),
+		}, nil
+	}
+
+	// Extrai os textos limpos para enviar ao validador da LLM
+	filteredTexts := make([]string, len(matchedVacancies))
+	for i, v := range matchedVacancies {
+		filteredTexts[i] = v.Text
+	}
+
+	// 6. Faz o match fino e estruturado usando a LLM (Gemini/DeepSeek)
+	log.Printf("[Orchestrator] Chamando validador da LLM para as %d vagas pré-filtradas...", len(matchedVacancies))
+	matchRes, err := o.geminiService.MatchResume(ctx, fileB64, fileMime, filteredTexts)
+	if err != nil {
+		log.Printf("[Orchestrator] LLM validation matching falhou: %v", err)
+		var dummyScores []vacancyScore
+		for _, v := range matchedVacancies {
+			dummyScores = append(dummyScores, vacancyScore{Index: v.Index, Text: v.Text, Passed: true})
+		}
+		_ = writeExecutionLog(logFilename, start, 0, 0, nil, dummyScores, fmt.Sprintf("Erro no refino de matching LLM: %v", err))
+		return nil, fmt.Errorf("LLM matching failed: %w", err)
+	}
+
+	// 7. Mapeia os índices da lista filtrada de volta para os índices originais salvos
 	var validMatches []domain.Match
 	for i := range matchRes.Matches {
 		idx := matchRes.Matches[i].Index
-		if idx >= 0 && idx < len(filtered) {
-			origIdx := filtered[idx].originalIndex
-			log.Printf("[Orchestrator] Match index mapping: LLM index %d -> original vacancy index %d", idx, origIdx)
+		if idx >= 0 && idx < len(matchedVacancies) {
+			origIdx := matchedVacancies[idx].Index
+			log.Printf("[Orchestrator] Mapeamento de índice: LLM index %d -> original index %d", idx, origIdx)
 			matchRes.Matches[i].Index = origIdx
 			validMatches = append(validMatches, matchRes.Matches[i])
 		} else {
-			log.Printf("[Orchestrator] Warning: LLM returned out-of-bounds index %d in validator choice", idx)
+			log.Printf("[Orchestrator] Aviso: LLM retornou índice fora do escopo (%d)", idx)
 		}
 	}
 	matchRes.Matches = validMatches
-	log.Printf("[Orchestrator] LLM validated %d final matches.", len(matchRes.Matches))
+	log.Printf("[Orchestrator] LLM validou %d matches finais.", len(matchRes.Matches))
 
-	// 11. Dispatch applications based on match contacts
+	// 8. Dispara as candidaturas confirmadas
 	var dispatchResults []dispatchResult
+	var scores []vacancyScore
+	for _, v := range matchedVacancies {
+		scores = append(scores, vacancyScore{
+			Index:  v.Index,
+			Score:  1.0, // score dummy para o log legível
+			Passed: true,
+			Text:   v.Text,
+		})
+	}
+
 	for i, match := range matchRes.Matches {
-		log.Printf("[Orchestrator] Processing match dispatch %d/%d (original index: %d, contact: %s, target: %s)", i+1, len(matchRes.Matches), match.Index, match.ContactType, match.ContactTarget)
+		log.Printf("[Orchestrator] Processando disparo %d/%d (original index: %d, contato: %s, destino: %s)", i+1, len(matchRes.Matches), match.Index, match.ContactType, match.ContactTarget)
 		status := "Não disparado (sem contato válido)"
 		switch match.ContactType {
 		case "email":
-			log.Printf("[Orchestrator] Dispatching Email -> to: %s...", match.ContactTarget)
+			log.Printf("[Orchestrator] Enviando E-mail -> para: %s...", match.ContactTarget)
 			subject := "Candidatura - Processamento Automático"
 			body := fmt.Sprintf("Olá,\n\nEstou me candidatando à vaga de emprego número %d.\n\nMotivo da compatibilidade:\n%s\n\nEm anexo, envio meu currículo para avaliação.\n\nAtenciosamente,\nCandidato", match.Index+1, match.Reason)
 
-			err := o.emailService.SendEmail(ctx, match.ContactTarget, subject, body, req.FileBase64, "curriculo.pdf")
+			err := o.emailService.SendEmail(ctx, match.ContactTarget, subject, body, fileB64, "curriculo.pdf")
 			if err != nil {
-				log.Printf("[Orchestrator] Email dispatch to %s failed: %v", match.ContactTarget, err)
+				log.Printf("[Orchestrator] Falha no e-mail para %s: %v", match.ContactTarget, err)
 				status = fmt.Sprintf("Erro no envio do e-mail: %v", err)
 			} else {
-				log.Printf("[Orchestrator] Email dispatched successfully to %s", match.ContactTarget)
+				log.Printf("[Orchestrator] E-mail enviado com sucesso para %s", match.ContactTarget)
 				status = "Sucesso (e-mail enviado)"
 			}
 
 		case "whatsapp":
-			log.Printf("[Orchestrator] Dispatching WhatsApp -> to: %s...", match.ContactTarget)
+			log.Printf("[Orchestrator] Enviando WhatsApp -> para: %s...", match.ContactTarget)
 			body := fmt.Sprintf("Olá!\n\nEstou me candidatando à sua vaga de emprego.\n\n*Motivo do Match:*\n%s\n\nEnviei meu currículo por e-mail ou no formato correspondente para análise.", match.Reason)
 
 			err := o.whatsAppService.SendMessage(ctx, match.ContactTarget, body)
 			if err != nil {
-				log.Printf("[Orchestrator] WhatsApp dispatch to %s failed: %v", match.ContactTarget, err)
+				log.Printf("[Orchestrator] Falha no WhatsApp para %s: %v", match.ContactTarget, err)
 				status = fmt.Sprintf("Erro no envio do WhatsApp: %v", err)
 			} else {
-				log.Printf("[Orchestrator] WhatsApp dispatched successfully to %s", match.ContactTarget)
+				log.Printf("[Orchestrator] WhatsApp enviado com sucesso para %s", match.ContactTarget)
 				status = "Sucesso (WhatsApp enviado)"
 			}
 
 		default:
-			log.Printf("[Orchestrator] Unknown contact type '%s'. Skipping.", match.ContactType)
+			log.Printf("[Orchestrator] Tipo de contato desconhecido '%s'. Pulando.", match.ContactType)
 			status = fmt.Sprintf("Não disparado (tipo de contato desconhecido: '%s')", match.ContactType)
 		}
 
@@ -333,18 +358,18 @@ func (o *orchestrator) RunMatchAndDispatch(ctx context.Context, req *domain.Proc
 		})
 	}
 
-	// 12. Write execution report to log file
-	err = writeExecutionLog(logFilename, start, res.ItemsProcessed, len(matchRes.Matches), dispatchResults, scores, "")
+	// 9. Grava o log detalhado em arquivo
+	err = writeExecutionLog(logFilename, start, int64(len(scores)), len(matchRes.Matches), dispatchResults, scores, "")
 	if err != nil {
-		log.Printf("[Orchestrator] Error writing report to log file %s: %v", logFilename, err)
-	} else {
-		log.Printf("[Orchestrator] Detailed report successfully saved to log file: %s", logFilename)
+		log.Printf("[Orchestrator] Erro ao gravar arquivo de log %s: %v", logFilename, err)
 	}
 
-	// 13. Populate final match results and duration
-	res.Matches = matchRes.Matches
-	res.DurationMs = time.Since(start).Milliseconds()
-	log.Printf("[Orchestrator] Total orchestrator process finished in %dms.", res.DurationMs)
-
-	return res, nil
+	return &domain.ProcessResult{
+		Status:     "success",
+		Matches:    matchRes.Matches,
+		DurationMs: time.Since(start).Milliseconds(),
+	}, nil
 }
+
+// RunMatchAndDispatch serve para compatibilidade com o fluxo legível de endpoint único (e também nos testes unitários).
+

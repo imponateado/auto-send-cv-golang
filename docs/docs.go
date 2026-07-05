@@ -15,9 +15,9 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
-        "/api/v1/process": {
+        "/api/v1/match": {
             "post": {
-                "description": "Recebe um texto bruto fatiado por delimitador e/ou um currículo em formato PDF/documento em base64. Identifica compatibilidade de vagas com Gemini e dispara notificações via e-mail e whatsapp.",
+                "description": "Recebe apenas o currículo do candidato em base64. Gera o embedding vetorial do currículo, executa a busca de similaridade rápida no banco local (chromem-go) e envia as vagas compatíveis para triagem detalhada via LLM (Gemini/DeepSeek), realizando também os disparos automáticos.",
                 "consumes": [
                     "application/json"
                 ],
@@ -27,33 +27,109 @@ const docTemplate = `{
                 "tags": [
                     "Processador"
                 ],
-                "summary": "Processa texto e currículos com match inteligente e envios automáticos",
+                "summary": "Executa match de currículo contra banco de vagas",
                 "parameters": [
                     {
-                        "description": "Payload de processamento",
+                        "description": "Payload contendo apenas o currículo base64",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/domain.ProcessRequest"
+                            "$ref": "#/definitions/handler.matchRequest"
                         }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "Resultado da busca vetorial e envios automáticos",
                         "schema": {
                             "$ref": "#/definitions/domain.ProcessResult"
                         }
                     },
                     "400": {
-                        "description": "Requisição inválida (JSON corrompido, campos obrigatórios ausentes)",
+                        "description": "Requisição inválida",
                         "schema": {
                             "$ref": "#/definitions/domain.ErrorResponse"
                         }
                     },
                     "500": {
-                        "description": "Erro interno do servidor ao processar o payload",
+                        "description": "Erro ao extrair, buscar ou enviar candidaturas",
+                        "schema": {
+                            "$ref": "#/definitions/domain.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/vacancies": {
+            "post": {
+                "description": "Recebe uma lista de vagas em texto bruto e um delimitador. Divide o texto, gera os embeddings vetoriais via Ollama (em lote) e as salva no banco vetorial local (chromem-go) de forma persistente.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Vagas"
+                ],
+                "summary": "Popula o banco vetorial de vagas",
+                "parameters": [
+                    {
+                        "description": "Payload com as vagas e delimitador",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handler.populateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Vagas salvas e indexadas com sucesso",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Requisição inválida",
+                        "schema": {
+                            "$ref": "#/definitions/domain.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Erro ao processar e salvar vagas",
+                        "schema": {
+                            "$ref": "#/definitions/domain.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/vacancies/clear": {
+            "post": {
+                "description": "Remove todas as vagas e coleções existentes no banco de dados local do chromem-go.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Vagas"
+                ],
+                "summary": "Limpa o banco de dados vetorial de vagas",
+                "responses": {
+                    "200": {
+                        "description": "Banco vetorial de vagas limpo com sucesso",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Erro interno ao limpar banco vetorial",
                         "schema": {
                             "$ref": "#/definitions/domain.ErrorResponse"
                         }
@@ -109,20 +185,6 @@ const docTemplate = `{
                 }
             }
         },
-        "domain.ProcessRequest": {
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "string"
-                },
-                "delimiter": {
-                    "type": "string"
-                },
-                "file_base64": {
-                    "type": "string"
-                }
-            }
-        },
         "domain.ProcessResult": {
             "type": "object",
             "properties": {
@@ -155,6 +217,25 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "handler.matchRequest": {
+            "type": "object",
+            "properties": {
+                "file_base64": {
+                    "type": "string"
+                }
+            }
+        },
+        "handler.populateRequest": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "delimiter": {
+                    "type": "string"
+                }
+            }
         }
     }
 }`
@@ -166,7 +247,7 @@ var SwaggerInfo = &swag.Spec{
 	BasePath:         "/",
 	Schemes:          []string{},
 	Title:            "API Go de Processamento de Texto e Documentos",
-	Description:      "API REST para processamento de textos, análise de currículos e disparos automáticos.",
+	Description:      "API REST em Go com Clean Architecture para processamento de textos, análise de currículos com Gemini e disparos automáticos.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

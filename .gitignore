@@ -21,3 +21,13 @@ vendor/
 # Environment configurations
 .env
 .env.local
+
+# Local Database
+db/
+
+# Temporary directories
+.tmp_send/
+
+# Log files
+log_*.txt
+internal/service/log_*.txt

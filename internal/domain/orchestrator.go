@@ -4,7 +4,9 @@ import (
 	"context"
 )
 
-// Orchestrator defines the domain contract for processing files, matching with Gemini, and dispatching notifications.
+// Orchestrator define o contrato de domínio para orquestrar o processamento de vagas e currículos.
 type Orchestrator interface {
-	RunMatchAndDispatch(ctx context.Context, req *ProcessRequest) (*ProcessResult, error)
+	ClearVacancies(ctx context.Context) error
+	PopulateVacancies(ctx context.Context, content, delimiter string) (int, error)
+	MatchResume(ctx context.Context, fileB64, fileMime string) (*ProcessResult, error)
 }

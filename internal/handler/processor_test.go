@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,34 +11,48 @@ import (
 	"api/internal/domain"
 )
 
-// mockOrchestrator implements domain.Orchestrator for testing handlers
 type mockOrchestrator struct {
-	runFn func(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error)
+	clearFn    func(ctx context.Context) error
+	populateFn func(ctx context.Context, content, delimiter string) (int, error)
+	matchFn    func(ctx context.Context, fileB64, fileMime string) (*domain.ProcessResult, error)
 }
 
-func (m *mockOrchestrator) RunMatchAndDispatch(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error) {
-	return m.runFn(ctx, req)
+func (m *mockOrchestrator) ClearVacancies(ctx context.Context) error {
+	if m.clearFn != nil {
+		return m.clearFn(ctx)
+	}
+	return nil
 }
 
-func TestProcessorHandler_Process(t *testing.T) {
-	t.Run("Successful processing with content only", func(t *testing.T) {
+func (m *mockOrchestrator) PopulateVacancies(ctx context.Context, content, delimiter string) (int, error) {
+	if m.populateFn != nil {
+		return m.populateFn(ctx, content, delimiter)
+	}
+	return 0, nil
+}
+
+func (m *mockOrchestrator) MatchResume(ctx context.Context, fileB64, fileMime string) (*domain.ProcessResult, error) {
+	if m.matchFn != nil {
+		return m.matchFn(ctx, fileB64, fileMime)
+	}
+	return &domain.ProcessResult{Status: "success"}, nil
+}
+
+func TestProcessorHandler_Clear(t *testing.T) {
+	t.Run("Successful clear", func(t *testing.T) {
+		clearCalled := false
 		mockOrch := &mockOrchestrator{
-			runFn: func(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error) {
-				return &domain.ProcessResult{
-					BytesProcessed: 12,
-					ItemsProcessed: 1,
-					Items:          []string{"test content"},
-					Status:         "success",
-				}, nil
+			clearFn: func(ctx context.Context) error {
+				clearCalled = true
+				return nil
 			},
 		}
 
 		h := NewProcessorHandler(mockOrch)
-		jsonReq := `{"content": "test content", "delimiter": "\n"}`
-		req := httptest.NewRequest("POST", "/api/v1/process", strings.NewReader(jsonReq))
+		req := httptest.NewRequest("POST", "/api/v1/vacancies/clear", nil)
 		w := httptest.NewRecorder()
 
-		h.Process(w, req)
+		h.Clear(w, req)
 
 		resp := w.Result()
 		defer resp.Body.Close()
@@ -47,31 +60,28 @@ func TestProcessorHandler_Process(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("expected status 200, got: %d", resp.StatusCode)
 		}
+		if !clearCalled {
+			t.Error("expected ClearVacancies to be called on orchestrator")
+		}
 	})
+}
 
-	t.Run("Successful processing with file only", func(t *testing.T) {
+func TestProcessorHandler_Populate(t *testing.T) {
+	t.Run("Successful populate", func(t *testing.T) {
+		populateCalled := false
 		mockOrch := &mockOrchestrator{
-			runFn: func(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error) {
-				return &domain.ProcessResult{
-					BytesProcessed: 0,
-					ItemsProcessed: 0,
-					Items:          []string{},
-					File: &domain.FileMetadata{
-						SizeInBytes: 11,
-						MimeType:    "text/plain",
-						Status:      "decoded",
-					},
-					Status: "success",
-				}, nil
+			populateFn: func(ctx context.Context, content, delimiter string) (int, error) {
+				populateCalled = true
+				return 5, nil
 			},
 		}
 
 		h := NewProcessorHandler(mockOrch)
-		jsonReq := `{"file_base64": "aGVsbG8gd29ybGQ="}`
-		req := httptest.NewRequest("POST", "/api/v1/process", strings.NewReader(jsonReq))
+		jsonReq := `{"content": "vaga1---vaga2", "delimiter": "---"}`
+		req := httptest.NewRequest("POST", "/api/v1/vacancies", strings.NewReader(jsonReq))
 		w := httptest.NewRecorder()
 
-		h.Process(w, req)
+		h.Populate(w, req)
 
 		resp := w.Result()
 		defer resp.Body.Close()
@@ -79,81 +89,43 @@ func TestProcessorHandler_Process(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("expected status 200, got: %d", resp.StatusCode)
 		}
-
-		var result map[string]string
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			t.Fatalf("failed to decode response: %v", err)
+		if !populateCalled {
+			t.Error("expected PopulateVacancies to be called on orchestrator")
 		}
 
-		if result["status"] != "success" {
-			t.Errorf("unexpected status in response: %s", result["status"])
-		}
-	})
-
-	t.Run("Validation fails - both fields empty", func(t *testing.T) {
-		h := NewProcessorHandler(&mockOrchestrator{})
-		jsonReq := `{"delimiter": "\n"}`
-		req := httptest.NewRequest("POST", "/api/v1/process", strings.NewReader(jsonReq))
-		w := httptest.NewRecorder()
-
-		h.Process(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Errorf("expected status 400, got: %d", resp.StatusCode)
-		}
-
-		var errResp map[string]string
-		json.NewDecoder(resp.Body).Decode(&errResp)
-		if !strings.Contains(errResp["error"], "Either 'content' or 'file_base64' must be provided") {
-			t.Errorf("unexpected error message: %s", errResp["error"])
+		var res map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&res)
+		if res["status"] != "success" || res["items_processed"] != float64(5) {
+			t.Errorf("unexpected response content: %v", res)
 		}
 	})
+}
 
-	t.Run("Validation fails - content sent but delimiter missing", func(t *testing.T) {
-		h := NewProcessorHandler(&mockOrchestrator{})
-		jsonReq := `{"content": "hello"}`
-		req := httptest.NewRequest("POST", "/api/v1/process", strings.NewReader(jsonReq))
-		w := httptest.NewRecorder()
-
-		h.Process(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Errorf("expected status 400, got: %d", resp.StatusCode)
-		}
-
-		var errResp map[string]string
-		json.NewDecoder(resp.Body).Decode(&errResp)
-		if !strings.Contains(errResp["error"], "Field 'delimiter' is required") {
-			t.Errorf("unexpected error message: %s", errResp["error"])
-		}
-	})
-
-	t.Run("Service returns bad base64 encoding error", func(t *testing.T) {
+func TestProcessorHandler_Match(t *testing.T) {
+	t.Run("Successful match", func(t *testing.T) {
+		matchCalled := false
 		mockOrch := &mockOrchestrator{
-			runFn: func(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error) {
-				return nil, errors.New("invalid base64 encoding")
+			matchFn: func(ctx context.Context, fileB64, fileMime string) (*domain.ProcessResult, error) {
+				matchCalled = true
+				return &domain.ProcessResult{Status: "success"}, nil
 			},
 		}
 
 		h := NewProcessorHandler(mockOrch)
-		jsonReq := `{"file_base64": "invalid-base64!!"}`
-		req := httptest.NewRequest("POST", "/api/v1/process", strings.NewReader(jsonReq))
+		jsonReq := `{"file_base64": "aGVsbG8="}`
+		req := httptest.NewRequest("POST", "/api/v1/match", strings.NewReader(jsonReq))
 		w := httptest.NewRecorder()
 
-		h.Process(w, req)
+		h.Match(w, req)
 
 		resp := w.Result()
 		defer resp.Body.Close()
 
-		// Handler is expected to catch "invalid base64 encoding" and return 400
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Errorf("expected status 400, got: %d", resp.StatusCode)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected status 200, got: %d", resp.StatusCode)
+		}
+		if !matchCalled {
+			t.Error("expected MatchResume to be called on orchestrator")
 		}
 	})
 }

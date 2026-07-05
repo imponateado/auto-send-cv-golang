@@ -25,10 +25,12 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// RegisterRoutes sets up the endpoint and decorates it with logging and recovery middleware.
+// RegisterRoutes sets up the endpoints and decorates them with logging and recovery middleware.
 func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler) http.Handler {
-	// Register endpoint using Go 1.22+ ServeMux method-matching syntax
-	mux.HandleFunc("POST /api/v1/process", procHandler.Process)
+	// Register endpoints using Go 1.22+ ServeMux method-matching syntax
+	mux.HandleFunc("POST /api/v1/vacancies/clear", procHandler.Clear)
+	mux.HandleFunc("POST /api/v1/vacancies", procHandler.Populate)
+	mux.HandleFunc("POST /api/v1/match", procHandler.Match)
 
 	// Register Swagger UI handler
 	mux.Handle("GET /swagger/", httpSwagger.WrapHandler)
@@ -60,6 +62,7 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 				respondWithError(w, http.StatusInternalServerError, "Internal Server Error")
 			}
 		}()
+
 		next.ServeHTTP(w, r)
 	})
 }

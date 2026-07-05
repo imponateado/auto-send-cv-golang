@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"api/internal/domain"
 )
@@ -18,50 +19,114 @@ func NewProcessorHandler(orchestrator domain.Orchestrator) *ProcessorHandler {
 	}
 }
 
-// Process handles POST requests, decodes the JSON body, and calls the orchestrator layer.
-// @Summary Processa texto e currículos com match inteligente e envios automáticos
-// @Description Recebe um texto bruto fatiado por delimitador e/ou um currículo em formato PDF/documento em base64. Identifica compatibilidade de vagas com Gemini e dispara notificações via e-mail e whatsapp.
-// @Tags Processador
+
+// Clear handles POST /api/v1/vacancies/clear
+// @Summary Limpa o banco de dados vetorial de vagas
+// @Description Remove todas as vagas e coleções existentes no banco de dados local do chromem-go.
+// @Tags Vagas
+// @Produce json
+// @Success 200 {object} map[string]string "Banco vetorial de vagas limpo com sucesso"
+// @Failure 500 {object} domain.ErrorResponse "Erro interno ao limpar banco vetorial"
+// @Router /api/v1/vacancies/clear [post]
+func (h *ProcessorHandler) Clear(w http.ResponseWriter, r *http.Request) {
+	err := h.orchestrator.ClearVacancies(r.Context())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to clear vacancies database: "+err.Error())
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, map[string]string{
+		"status":  "success",
+		"message": "Vacancies database cleared successfully",
+	})
+}
+
+type populateRequest struct {
+	Content   string `json:"content"`
+	Delimiter string `json:"delimiter"`
+}
+
+// Populate handles POST /api/v1/vacancies
+// @Summary Popula o banco vetorial de vagas
+// @Description Recebe uma lista de vagas em texto bruto e um delimitador. Divide o texto, gera os embeddings vetoriais via Ollama (em lote) e as salva no banco vetorial local (chromem-go) de forma persistente.
+// @Tags Vagas
 // @Accept json
 // @Produce json
-// @Param request body domain.ProcessRequest true "Payload de processamento"
-// @Success 200 {object} domain.ProcessResult
-// @Failure 400 {object} domain.ErrorResponse "Requisição inválida (JSON corrompido, campos obrigatórios ausentes)"
-// @Failure 500 {object} domain.ErrorResponse "Erro interno do servidor ao processar o payload"
-// @Router /api/v1/process [post]
-func (h *ProcessorHandler) Process(w http.ResponseWriter, r *http.Request) {
-	var req domain.ProcessRequest
-
-	// Decode the JSON request body
+// @Param request body populateRequest true "Payload com as vagas e delimitador"
+// @Success 200 {object} map[string]interface{} "Vagas salvas e indexadas com sucesso"
+// @Failure 400 {object} domain.ErrorResponse "Requisição inválida"
+// @Failure 500 {object} domain.ErrorResponse "Erro ao processar e salvar vagas"
+// @Router /api/v1/vacancies [post]
+func (h *ProcessorHandler) Populate(w http.ResponseWriter, r *http.Request) {
+	var req populateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondWithError(w, http.StatusBadRequest, "Invalid JSON payload: "+err.Error())
 		return
 	}
 
-	// Validate request fields
-	if req.Content == "" && req.FileBase64 == "" {
-		respondWithError(w, http.StatusBadRequest, "Either 'content' or 'file_base64' must be provided")
+	if req.Content == "" {
+		respondWithError(w, http.StatusBadRequest, "Field 'content' is required")
+		return
+	}
+	if req.Delimiter == "" {
+		respondWithError(w, http.StatusBadRequest, "Field 'delimiter' is required")
 		return
 	}
 
-	if req.Content != "" && req.Delimiter == "" {
-		respondWithError(w, http.StatusBadRequest, "Field 'delimiter' is required when 'content' is provided")
-		return
-	}
-
-	// Call orchestrator with the request data
-	_, err := h.orchestrator.RunMatchAndDispatch(r.Context(), &req)
+	count, err := h.orchestrator.PopulateVacancies(r.Context(), req.Content, req.Delimiter)
 	if err != nil {
-		// Distinguish bad base64 encoding as a Bad Request (400)
-		if err.Error() == "invalid base64 encoding" {
-			respondWithError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		respondWithError(w, http.StatusInternalServerError, "Failed to process payload: "+err.Error())
+		respondWithError(w, http.StatusInternalServerError, "Failed to populate database: "+err.Error())
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, map[string]string{"status": "success"})
+	respondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"status":          "success",
+		"items_processed": count,
+		"message":         "Vacancies database populated successfully",
+	})
+}
+
+type matchRequest struct {
+	FileBase64 string `json:"file_base64"`
+}
+
+// Match handles POST /api/v1/match
+// @Summary Executa match de currículo contra banco de vagas
+// @Description Recebe apenas o currículo do candidato em base64. Gera o embedding vetorial do currículo, executa a busca de similaridade rápida no banco local (chromem-go) e envia as vagas compatíveis para triagem detalhada via LLM (Gemini/DeepSeek), realizando também os disparos automáticos.
+// @Tags Processador
+// @Accept json
+// @Produce json
+// @Param request body matchRequest true "Payload contendo apenas o currículo base64"
+// @Success 200 {object} domain.ProcessResult "Resultado da busca vetorial e envios automáticos"
+// @Failure 400 {object} domain.ErrorResponse "Requisição inválida"
+// @Failure 500 {object} domain.ErrorResponse "Erro ao extrair, buscar ou enviar candidaturas"
+// @Router /api/v1/match [post]
+func (h *ProcessorHandler) Match(w http.ResponseWriter, r *http.Request) {
+	var req matchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid JSON payload: "+err.Error())
+		return
+	}
+
+	if req.FileBase64 == "" {
+		respondWithError(w, http.StatusBadRequest, "Field 'file_base64' is required")
+		return
+	}
+
+	// Clean base64 prefix if present
+	base64Data := req.FileBase64
+	if idx := strings.Index(base64Data, ","); idx != -1 {
+		base64Data = base64Data[idx+1:]
+	}
+	base64Data = strings.Join(strings.Fields(base64Data), "")
+
+	res, err := h.orchestrator.MatchResume(r.Context(), base64Data, "application/pdf")
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to match resume: "+err.Error())
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, res)
 }
 
 func respondWithError(w http.ResponseWriter, code int, message string) {
