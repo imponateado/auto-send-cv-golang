@@ -50,7 +50,7 @@ func (h *ProcessorHandler) Process(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call orchestrator with the request data
-	result, err := h.orchestrator.RunMatchAndDispatch(r.Context(), &req)
+	_, err := h.orchestrator.RunMatchAndDispatch(r.Context(), &req)
 	if err != nil {
 		// Distinguish bad base64 encoding as a Bad Request (400)
 		if err.Error() == "invalid base64 encoding" {
@@ -61,7 +61,7 @@ func (h *ProcessorHandler) Process(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, result)
+	respondWithJSON(w, http.StatusOK, map[string]string{"status": "success"})
 }
 
 func respondWithError(w http.ResponseWriter, code int, message string) {

@@ -80,13 +80,13 @@ func TestProcessorHandler_Process(t *testing.T) {
 			t.Errorf("expected status 200, got: %d", resp.StatusCode)
 		}
 
-		var result domain.ProcessResult
+		var result map[string]string
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 			t.Fatalf("failed to decode response: %v", err)
 		}
 
-		if result.File == nil || result.File.MimeType != "text/plain" {
-			t.Errorf("unexpected file metadata in response: %+v", result.File)
+		if result["status"] != "success" {
+			t.Errorf("unexpected status in response: %s", result["status"])
 		}
 	})
 

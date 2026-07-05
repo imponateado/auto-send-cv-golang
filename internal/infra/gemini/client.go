@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"api/internal/domain"
+	"api/internal/infra/pdf"
 )
 
 type geminiClient struct {
@@ -164,6 +166,7 @@ func (c *geminiClient) MatchResume(ctx context.Context, fileB64 string, fileMime
 		},
 	}
 
+	log.Printf("[GeminiClient] Marshalling request payload for MatchResume with %d vacancies...", len(vacancies))
 	jsonBytes, err := json.Marshal(reqPayload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal gemini request: %w", err)
@@ -176,14 +179,21 @@ func (c *geminiClient) MatchResume(ctx context.Context, fileB64 string, fileMime
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	log.Printf("[GeminiClient] Sending POST request to %s (payload size: %d bytes)...", url, len(jsonBytes))
+	startHttp := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		log.Printf("[GeminiClient] HTTP request failed after %s: %v", time.Since(startHttp), err)
 		return nil, fmt.Errorf("http request to gemini failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	latency := time.Since(startHttp)
+	log.Printf("[GeminiClient] HTTP response received in %s. Status code: %d", latency, resp.StatusCode)
+
 	if resp.StatusCode != http.StatusOK {
 		respBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("[GeminiClient] Error response body: %s", string(respBytes))
 		return nil, fmt.Errorf("gemini api returned status code %d: %s", resp.StatusCode, string(respBytes))
 	}
 
@@ -193,16 +203,120 @@ func (c *geminiClient) MatchResume(ctx context.Context, fileB64 string, fileMime
 	}
 
 	if len(geminiRes.Candidates) == 0 || len(geminiRes.Candidates[0].Content.Parts) == 0 {
+		log.Println("[GeminiClient] Error: Gemini returned an empty candidate list or empty parts")
 		return nil, fmt.Errorf("gemini returned an empty response")
 	}
 
 	responseText := geminiRes.Candidates[0].Content.Parts[0].Text
+	log.Printf("[GeminiClient] Raw response content from model:\n%s", responseText)
 
 	// Parse structured JSON returned by Gemini
 	var matchResult domain.MatchResult
 	if err := json.Unmarshal([]byte(responseText), &matchResult); err != nil {
+		log.Printf("[GeminiClient] Error unmarshalling structured JSON: %v", err)
 		return nil, fmt.Errorf("failed to parse structured result from gemini response text: %w", err)
 	}
 
+	log.Printf("[GeminiClient] Successfully parsed %d matches from JSON", len(matchResult.Matches))
 	return &matchResult, nil
 }
+
+type geminiBatchEmbedRequest struct {
+	Requests []geminiEmbedRequest `json:"requests"`
+}
+
+type geminiEmbedRequest struct {
+	Model   string        `json:"model"`
+	Content geminiContent `json:"content"`
+}
+
+type geminiContent struct {
+	Parts []geminiPart `json:"parts"`
+}
+
+type geminiPart struct {
+	Text string `json:"text"`
+}
+
+type geminiBatchEmbedResponse struct {
+	Embeddings []geminiEmbedding `json:"embeddings"`
+}
+
+type geminiEmbedding struct {
+	Values []float32 `json:"values"`
+}
+
+func (c *geminiClient) GetEmbeddings(ctx context.Context, texts []string) ([][]float32, error) {
+	if c.apiKey == "" {
+		return nil, fmt.Errorf("gemini client is misconfigured: api key is required")
+	}
+	if len(texts) == 0 {
+		return [][]float32{}, nil
+	}
+
+	log.Printf("[GeminiClient] Generating embeddings for %d text items...", len(texts))
+
+	embedRequests := make([]geminiEmbedRequest, len(texts))
+	for i, text := range texts {
+		embedRequests[i] = geminiEmbedRequest{
+			Model: "models/gemini-embedding-001",
+			Content: geminiContent{
+				Parts: []geminiPart{
+					{Text: text},
+				},
+			},
+		}
+	}
+
+	reqPayload := geminiBatchEmbedRequest{
+		Requests: embedRequests,
+	}
+
+	jsonBytes, err := json.Marshal(reqPayload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal gemini batch embedding request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/models/gemini-embedding-001:batchEmbedContents?key=%s", c.apiURL, c.apiKey)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create http request to gemini embeddings: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	log.Printf("[GeminiClient] Sending embedding request to %s (payload: %d bytes)...", url, len(jsonBytes))
+	startHttp := time.Now()
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		log.Printf("[GeminiClient] Embedding request failed after %s: %v", time.Since(startHttp), err)
+		return nil, fmt.Errorf("http request to gemini embeddings failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	latency := time.Since(startHttp)
+	log.Printf("[GeminiClient] Embedding response received in %s. Status code: %d", latency, resp.StatusCode)
+
+	if resp.StatusCode != http.StatusOK {
+		respBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("[GeminiClient] Error embedding body: %s", string(respBytes))
+		return nil, fmt.Errorf("gemini embedding api returned status code %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	var embedRes geminiBatchEmbedResponse
+	if err := json.NewDecoder(resp.Body).Decode(&embedRes); err != nil {
+		return nil, fmt.Errorf("failed to decode gemini embedding response: %w", err)
+	}
+
+	result := make([][]float32, len(embedRes.Embeddings))
+	for i, emb := range embedRes.Embeddings {
+		result[i] = emb.Values
+	}
+
+	log.Printf("[GeminiClient] Successfully extracted %d embeddings.", len(result))
+	return result, nil
+}
+
+func (c *geminiClient) ExtractText(ctx context.Context, fileB64 string, fileMime string) (string, error) {
+	return pdf.ExtractTextFromBase64(fileB64, fileMime)
+}
+

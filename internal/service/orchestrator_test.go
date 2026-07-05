@@ -18,10 +18,30 @@ func (m *mockProcessor) Process(ctx context.Context, req *domain.ProcessRequest)
 
 type mockGemini struct {
 	matchFn func(ctx context.Context, fileB64 string, fileMime string, vacancies []string) (*domain.MatchResult, error)
+	embedFn func(ctx context.Context, texts []string) ([][]float32, error)
+	extractTextFn func(ctx context.Context, fileB64 string, fileMime string) (string, error)
 }
 
 func (m *mockGemini) MatchResume(ctx context.Context, fileB64 string, fileMime string, vacancies []string) (*domain.MatchResult, error) {
 	return m.matchFn(ctx, fileB64, fileMime, vacancies)
+}
+
+func (m *mockGemini) GetEmbeddings(ctx context.Context, texts []string) ([][]float32, error) {
+	if m.embedFn != nil {
+		return m.embedFn(ctx, texts)
+	}
+	res := make([][]float32, len(texts))
+	for i := range res {
+		res[i] = []float32{1.0}
+	}
+	return res, nil
+}
+
+func (m *mockGemini) ExtractText(ctx context.Context, fileB64 string, fileMime string) (string, error) {
+	if m.extractTextFn != nil {
+		return m.extractTextFn(ctx, fileB64, fileMime)
+	}
+	return "currículo texto", nil
 }
 
 type mockEmail struct {
@@ -53,7 +73,7 @@ func TestOrchestrator_RunMatchAndDispatch(t *testing.T) {
 			},
 		}
 
-		orch := NewOrchestrator(mProc, &mockGemini{}, &mockEmail{}, &mockWhatsApp{})
+		orch := NewOrchestrator(mProc, &mockGemini{}, &mockGemini{}, &mockEmail{}, &mockWhatsApp{})
 		req := &domain.ProcessRequest{
 			Content:   "",
 			Delimiter: "\n",
@@ -119,7 +139,7 @@ func TestOrchestrator_RunMatchAndDispatch(t *testing.T) {
 			},
 		}
 
-		orch := NewOrchestrator(mProc, mGemini, mEmail, mWhatsApp)
+		orch := NewOrchestrator(mProc, mGemini, mGemini, mEmail, mWhatsApp)
 		req := &domain.ProcessRequest{
 			Content:    "vaga1\nvaga2",
 			Delimiter:  "\n",

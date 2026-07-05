@@ -70,6 +70,7 @@ func main() {
 	matchingOrchestrator := service.NewOrchestrator(
 		procService,
 		activeLLM,
+		geminiService, // Always use Gemini for embeddings
 		emailService,
 		whatsappService,
 	)
