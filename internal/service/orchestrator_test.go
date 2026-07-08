@@ -85,11 +85,36 @@ func (m *mockEmail) SendEmail(ctx context.Context, to string, subject string, bo
 }
 
 type mockWhatsApp struct {
-	sendFn func(ctx context.Context, to string, message string) error
+	sendFn func(ctx context.Context, phoneSender string, to string, message string) error
 }
 
-func (m *mockWhatsApp) SendMessage(ctx context.Context, to string, message string) error {
-	return m.sendFn(ctx, to, message)
+func (m *mockWhatsApp) SendMessage(ctx context.Context, phoneSender string, to string, message string) error {
+	return m.sendFn(ctx, phoneSender, to, message)
+}
+
+type mockCredsRepo struct {
+	getFn func(ctx context.Context, email string) (*domain.EmailCredentials, error)
+}
+
+func (m *mockCredsRepo) SaveEmailCredentials(ctx context.Context, creds *domain.EmailCredentials) error {
+	return nil
+}
+
+func (m *mockCredsRepo) GetEmailCredentials(ctx context.Context, email string) (*domain.EmailCredentials, error) {
+	if m.getFn != nil {
+		return m.getFn(ctx, email)
+	}
+	return &domain.EmailCredentials{
+		Email:        email,
+		Provider:     "google",
+		RefreshToken: "ref",
+		ClientID:     "id",
+		ClientSecret: "secret",
+	}, nil
+}
+
+func (m *mockCredsRepo) DeleteEmailCredentials(ctx context.Context, email string) error {
+	return nil
 }
 
 func TestOrchestrator_Methods(t *testing.T) {
@@ -102,7 +127,7 @@ func TestOrchestrator_Methods(t *testing.T) {
 			},
 		}
 
-		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockEmail{}, &mockWhatsApp{})
+		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, &mockWhatsApp{})
 		err := orch.ClearVacancies(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -124,7 +149,7 @@ func TestOrchestrator_Methods(t *testing.T) {
 			},
 		}
 
-		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockEmail{}, &mockWhatsApp{})
+		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, &mockWhatsApp{})
 		count, err := orch.PopulateVacancies(context.Background(), "vaga 1---vaga 2", "---")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -157,7 +182,7 @@ func TestOrchestrator_Methods(t *testing.T) {
 			},
 		}
 
-		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockEmail{}, &mockWhatsApp{})
+		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, &mockWhatsApp{})
 		count, err := orch.PopulateVacancies(context.Background(), "vaga 1---vaga 2", "---")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -195,17 +220,21 @@ func TestOrchestrator_Methods(t *testing.T) {
 
 		waCalls := 0
 		mWhatsApp := &mockWhatsApp{
-			sendFn: func(ctx context.Context, to string, message string) error {
+			sendFn: func(ctx context.Context, phoneSender string, to string, message string) error {
 				waCalls++
-				if to != "5511999999999" {
-					t.Errorf("unexpected whatsapp call parameters: to=%s", to)
+				if phoneSender != "5511888888888" || to != "5511999999999" {
+					t.Errorf("unexpected whatsapp call parameters: sender=%s, to=%s", phoneSender, to)
 				}
 				return nil
 			},
 		}
 
-		orch := NewOrchestrator(mGemini, mGemini, &mockVectorStore{}, mEmail, mWhatsApp)
-		res, err := orch.MatchResume(context.Background(), "aGVsbG8=", "application/pdf")
+		orch := NewOrchestrator(mGemini, mGemini, &mockVectorStore{}, &mockCredsRepo{}, mWhatsApp).(*orchestrator)
+		orch.newEmailService = func(creds *domain.EmailCredentials) domain.EmailService {
+			return mEmail
+		}
+
+		res, err := orch.MatchResume(context.Background(), "aGVsbG8=", "application/pdf", "test@gmail.com", "5511888888888")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -228,7 +257,7 @@ func TestOrchestrator_Methods(t *testing.T) {
 			},
 		}
 
-		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockEmail{}, &mockWhatsApp{})
+		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, &mockWhatsApp{})
 		taskID, err := orch.PopulateVacanciesAsync(context.Background(), "vaga 1---vaga 2", "---")
 		if err != nil {
 			t.Fatalf("unexpected error starting task: %v", err)

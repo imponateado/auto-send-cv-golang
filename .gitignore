@@ -23,7 +23,7 @@ vendor/
 .env.local
 
 # Local Database
-db/
+/db/
 
 # Temporary directories
 .tmp_send/

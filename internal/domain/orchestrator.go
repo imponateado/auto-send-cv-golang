@@ -17,5 +17,5 @@ type Orchestrator interface {
 	PopulateVacancies(ctx context.Context, content, delimiter string) (int, error)
 	PopulateVacanciesAsync(ctx context.Context, content, delimiter string) (string, error)
 	GetTaskStatus(ctx context.Context, taskID string) (*TaskStatus, error)
-	MatchResume(ctx context.Context, fileB64, fileMime string) (*ProcessResult, error)
+	MatchResume(ctx context.Context, fileB64, fileMime, candidateEmail, candidatePhone string) (*ProcessResult, error)
 }

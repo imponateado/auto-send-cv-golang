@@ -2,43 +2,47 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log"
 	"math"
 	"os"
 	"strconv"
-	"crypto/sha256"
 	"strings"
 	"sync"
 	"time"
 
 	"api/internal/domain"
+	"api/internal/infra/email"
 )
 
 type orchestrator struct {
 	geminiService    domain.GeminiService // matching service (Gemini or DeepSeek)
 	embeddingService domain.GeminiService // embedding service (Ollama)
 	vectorStore      domain.VectorStore   // banco vetorial (chromem-go)
-	emailService     domain.EmailService
-	whatsAppService  domain.WhatsAppService
+	credsRepo        domain.CredentialsRepository
+	waManager        domain.WhatsAppManager
+	newEmailService  func(creds *domain.EmailCredentials) domain.EmailService
 	tasksMu          sync.RWMutex
 	tasks            map[string]*domain.TaskStatus
 }
 
-// NewOrchestrator cria uma nova instância de orquestrador de casos de uso da aplicação.
 func NewOrchestrator(
 	geminiService domain.GeminiService,
 	embeddingService domain.GeminiService,
 	vectorStore domain.VectorStore,
-	emailService domain.EmailService,
-	whatsAppService domain.WhatsAppService,
+	credsRepo domain.CredentialsRepository,
+	waManager domain.WhatsAppManager,
 ) domain.Orchestrator {
 	return &orchestrator{
 		geminiService:    geminiService,
 		embeddingService: embeddingService,
 		vectorStore:      vectorStore,
-		emailService:     emailService,
-		whatsAppService:  whatsAppService,
+		credsRepo:        credsRepo,
+		waManager:        waManager,
+		newEmailService: func(creds *domain.EmailCredentials) domain.EmailService {
+			return email.NewOAuthEmailService(creds)
+		},
 		tasks:            make(map[string]*domain.TaskStatus),
 	}
 }
@@ -97,7 +101,7 @@ func writeExecutionLog(filename string, startTime time.Time, processedCount int6
 			builder.WriteString(fmt.Sprintf("- Destino de Envio: %s\n", r.match.ContactTarget))
 			builder.WriteString(fmt.Sprintf("- Justificativa da LLM: %s\n", r.match.Reason))
 			builder.WriteString(fmt.Sprintf("- Status de Envio: %s\n", r.status))
-			
+
 			// Localiza o texto da vaga no slice de scores
 			var vacText string
 			for _, s := range scores {
@@ -198,20 +202,20 @@ func (o *orchestrator) PopulateVacancies(ctx context.Context, content, delimiter
 		if end > len(newItems) {
 			end = len(newItems)
 		}
-		
+
 		batchItems := newItems[i:end]
 		log.Printf("[Orchestrator] Gerando embeddings para o lote de vagas novas %d até %d...", i, end-1)
-		
+
 		embs, err := o.embeddingService.GetEmbeddings(ctx, batchItems)
 		if err != nil {
 			return itemsSaved, fmt.Errorf("failed to generate embeddings for batch %d-%d: %w", i, end-1, err)
 		}
-		
+
 		err = o.vectorStore.AddVacancies(ctx, batchItems, embs)
 		if err != nil {
 			return itemsSaved, fmt.Errorf("failed to add vacancies batch %d-%d to local database: %w", i, end-1, err)
 		}
-		
+
 		itemsSaved += len(batchItems)
 	}
 
@@ -219,7 +223,7 @@ func (o *orchestrator) PopulateVacancies(ctx context.Context, content, delimiter
 }
 
 // MatchResume processa e extrai o currículo, gera o embedding e busca matches refinados via IA.
-func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime string) (*domain.ProcessResult, error) {
+func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candidateEmail, candidatePhone string) (*domain.ProcessResult, error) {
 	start := time.Now()
 	logFilename := fmt.Sprintf("log_%s.txt", start.Format("2006-01-02_15-04-05"))
 	log.Printf("[Orchestrator] Iniciando matching do currículo. Log salvo em: %s", logFilename)
@@ -335,11 +339,26 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime string
 		status := "Não disparado (sem contato válido)"
 		switch match.ContactType {
 		case "email":
+			if candidateEmail == "" {
+				log.Println("[Orchestrator] E-mail do candidato não fornecido na requisição. Pulando disparo.")
+				status = "Não disparado (e-mail do candidato não fornecido)"
+				break
+			}
+
+			log.Printf("[Orchestrator] Obtendo credenciais OAuth2 para o candidato %s...", candidateEmail)
+			creds, err := o.credsRepo.GetEmailCredentials(ctx, candidateEmail)
+			if err != nil {
+				log.Printf("[Orchestrator] Erro ao carregar credenciais para %s: %v", candidateEmail, err)
+				status = fmt.Sprintf("Erro ao carregar credenciais de e-mail: %v", err)
+				break
+			}
+
 			log.Printf("[Orchestrator] Enviando E-mail -> para: %s...", match.ContactTarget)
 			subject := "Candidatura - Processamento Automático"
 			body := fmt.Sprintf("Olá,\n\nEstou me candidatando à vaga de emprego número %d.\n\nMotivo da compatibilidade:\n%s\n\nEm anexo, envio meu currículo para avaliação.\n\nAtenciosamente,\nCandidato", match.Index+1, match.Reason)
 
-			err := o.emailService.SendEmail(ctx, match.ContactTarget, subject, body, fileB64, "curriculo.pdf")
+			emailService := o.newEmailService(creds)
+			err = emailService.SendEmail(ctx, match.ContactTarget, subject, body, fileB64, "curriculo.pdf")
 			if err != nil {
 				log.Printf("[Orchestrator] Falha no e-mail para %s: %v", match.ContactTarget, err)
 				status = fmt.Sprintf("Erro no envio do e-mail: %v", err)
@@ -349,10 +368,16 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime string
 			}
 
 		case "whatsapp":
-			log.Printf("[Orchestrator] Enviando WhatsApp -> para: %s...", match.ContactTarget)
+			if candidatePhone == "" {
+				log.Println("[Orchestrator] Telefone do candidato não fornecido na requisição. Pulando disparo.")
+				status = "Não disparado (telefone do candidato não fornecido)"
+				break
+			}
+
+			log.Printf("[Orchestrator] Enviando WhatsApp via WhatsMeow -> para: %s...", match.ContactTarget)
 			body := fmt.Sprintf("Olá!\n\nEstou me candidatando à sua vaga de emprego.\n\n*Motivo do Match:*\n%s\n\nEnviei meu currículo por e-mail ou no formato correspondente para análise.", match.Reason)
 
-			err := o.whatsAppService.SendMessage(ctx, match.ContactTarget, body)
+			err := o.waManager.SendMessage(ctx, candidatePhone, match.ContactTarget, body)
 			if err != nil {
 				log.Printf("[Orchestrator] Falha no WhatsApp para %s: %v", match.ContactTarget, err)
 				status = fmt.Sprintf("Erro no envio do WhatsApp: %v", err)

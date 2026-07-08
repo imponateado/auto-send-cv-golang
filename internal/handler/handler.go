@@ -26,12 +26,19 @@ func (rw *responseWriter) WriteHeader(code int) {
 }
 
 // RegisterRoutes sets up the endpoints and decorates them with logging and recovery middleware.
-func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler) http.Handler {
+func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler, credsHandler *CredentialsHandler) http.Handler {
 	// Register endpoints using Go 1.22+ ServeMux method-matching syntax
 	mux.HandleFunc("POST /api/v1/vacancies/clear", procHandler.Clear)
 	mux.HandleFunc("POST /api/v1/vacancies", procHandler.Populate)
 	mux.HandleFunc("POST /api/v1/match", procHandler.Match)
 	mux.HandleFunc("GET /api/v1/tasks/{id}", procHandler.GetTaskStatus)
+
+	// Credentials & WhatsApp routes
+	mux.HandleFunc("POST /api/v1/credentials", credsHandler.RegisterCredentials)
+	mux.HandleFunc("DELETE /api/v1/credentials/{email}", credsHandler.DeleteCredentials)
+	mux.HandleFunc("GET /api/v1/whatsapp/qr", credsHandler.GetWhatsAppQR)
+	mux.HandleFunc("GET /api/v1/whatsapp/status", credsHandler.GetWhatsAppStatus)
+	mux.HandleFunc("POST /api/v1/whatsapp/disconnect", credsHandler.DisconnectWhatsApp)
 
 	// Register Swagger UI handler
 	mux.Handle("GET /swagger/", httpSwagger.WrapHandler)

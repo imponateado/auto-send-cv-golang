@@ -14,8 +14,8 @@ import (
 	"api/internal/domain"
 	"api/internal/handler"
 	"api/internal/infra/chromem"
+	"api/internal/infra/db"
 	"api/internal/infra/deepseek"
-	"api/internal/infra/email"
 	"api/internal/infra/gemini"
 	"api/internal/infra/multillm"
 	"api/internal/infra/ollama"
@@ -33,17 +33,15 @@ func main() {
 
 	cfg := config.Load()
 
-	smtpHost := os.Getenv("SMTP_HOST")
-	smtpPort := os.Getenv("SMTP_PORT")
-	smtpUser := os.Getenv("SMTP_USERNAME")
-	smtpPass := os.Getenv("SMTP_PASSWORD")
-	smtpSender := os.Getenv("SMTP_SENDER")
-	emailService := email.NewSMTPSender(smtpHost, smtpPort, smtpUser, smtpPass, smtpSender)
+	credsRepo, err := db.NewSQLRepo("./db/api.db")
+	if err != nil {
+		log.Fatalf("Failed to initialize sqlite credentials database: %v", err)
+	}
 
-	zapiInstanceID := os.Getenv("ZAPI_INSTANCE_ID")
-	zapiToken := os.Getenv("ZAPI_TOKEN")
-	zapiClientToken := os.Getenv("ZAPI_CLIENT_TOKEN")
-	whatsappService := whatsapp.NewWhatsAppClient(zapiInstanceID, zapiToken, zapiClientToken)
+	waManager, err := whatsapp.NewWhatsMeowManager("./db/whatsapp.db")
+	if err != nil {
+		log.Fatalf("Failed to initialize whatsmeow manager: %v", err)
+	}
 
 	geminiKey := os.Getenv("GEMINI_API_KEY")
 	geminiModel := os.Getenv("GEMINI_MODEL")
@@ -81,14 +79,15 @@ func main() {
 		activeLLM,
 		ollamaService,
 		vectorStore, // Local Vector Database (chromem-go)
-		emailService,
-		whatsappService,
+		credsRepo,
+		waManager,
 	)
 
 	procHandler := handler.NewProcessorHandler(matchingOrchestrator)
+	credsHandler := handler.NewCredentialsHandler(credsRepo, waManager)
 
 	mux := http.NewServeMux()
-	router := handler.RegisterRoutes(mux, procHandler)
+	router := handler.RegisterRoutes(mux, procHandler, credsHandler)
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,

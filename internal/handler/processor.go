@@ -112,16 +112,18 @@ func (h *ProcessorHandler) GetTaskStatus(w http.ResponseWriter, r *http.Request)
 }
 
 type matchRequest struct {
-	FileBase64 string `json:"file_base64"`
+	FileBase64     string `json:"file_base64"`
+	CandidateEmail string `json:"candidate_email,omitempty"`
+	CandidatePhone string `json:"candidate_phone,omitempty"`
 }
 
 // Match handles POST /api/v1/match
 // @Summary Executa match de currículo contra banco de vagas
-// @Description Recebe apenas o currículo do candidato em base64. Gera o embedding vetorial do currículo, executa a busca de similaridade rápida no banco local (chromem-go) e envia as vagas compatíveis para triagem detalhada via LLM (Gemini/DeepSeek), realizando também os disparos automáticos.
+// @Description Recebe apenas o currículo do candidato em base64 e identifica o candidato para disparos dinâmicos.
 // @Tags Processador
 // @Accept json
 // @Produce json
-// @Param request body matchRequest true "Payload contendo apenas o currículo base64"
+// @Param request body matchRequest true "Payload contendo o currículo base64 e dados do candidato"
 // @Success 200 {object} domain.ProcessResult "Resultado da busca vetorial e envios automáticos"
 // @Failure 400 {object} domain.ErrorResponse "Requisição inválida"
 // @Failure 500 {object} domain.ErrorResponse "Erro ao extrair, buscar ou enviar candidaturas"
@@ -145,7 +147,7 @@ func (h *ProcessorHandler) Match(w http.ResponseWriter, r *http.Request) {
 	}
 	base64Data = strings.Join(strings.Fields(base64Data), "")
 
-	res, err := h.orchestrator.MatchResume(r.Context(), base64Data, "application/pdf")
+	res, err := h.orchestrator.MatchResume(r.Context(), base64Data, "application/pdf", req.CandidateEmail, req.CandidatePhone)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to match resume: "+err.Error())
 		return

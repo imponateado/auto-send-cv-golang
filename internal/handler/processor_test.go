@@ -16,7 +16,7 @@ type mockOrchestrator struct {
 	populateFn      func(ctx context.Context, content, delimiter string) (int, error)
 	populateAsyncFn func(ctx context.Context, content, delimiter string) (string, error)
 	taskStatusFn    func(ctx context.Context, taskID string) (*domain.TaskStatus, error)
-	matchFn         func(ctx context.Context, fileB64, fileMime string) (*domain.ProcessResult, error)
+	matchFn         func(ctx context.Context, fileB64, fileMime, candidateEmail, candidatePhone string) (*domain.ProcessResult, error)
 }
 
 func (m *mockOrchestrator) ClearVacancies(ctx context.Context) error {
@@ -47,9 +47,9 @@ func (m *mockOrchestrator) GetTaskStatus(ctx context.Context, taskID string) (*d
 	return &domain.TaskStatus{ID: taskID, Status: "completed"}, nil
 }
 
-func (m *mockOrchestrator) MatchResume(ctx context.Context, fileB64, fileMime string) (*domain.ProcessResult, error) {
+func (m *mockOrchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candidateEmail, candidatePhone string) (*domain.ProcessResult, error) {
 	if m.matchFn != nil {
-		return m.matchFn(ctx, fileB64, fileMime)
+		return m.matchFn(ctx, fileB64, fileMime, candidateEmail, candidatePhone)
 	}
 	return &domain.ProcessResult{Status: "success"}, nil
 }
@@ -163,7 +163,7 @@ func TestProcessorHandler_Match(t *testing.T) {
 	t.Run("Successful match", func(t *testing.T) {
 		matchCalled := false
 		mockOrch := &mockOrchestrator{
-			matchFn: func(ctx context.Context, fileB64, fileMime string) (*domain.ProcessResult, error) {
+			matchFn: func(ctx context.Context, fileB64, fileMime, candidateEmail, candidatePhone string) (*domain.ProcessResult, error) {
 				matchCalled = true
 				return &domain.ProcessResult{Status: "success"}, nil
 			},
