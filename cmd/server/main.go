@@ -33,9 +33,19 @@ func main() {
 
 	cfg := config.Load()
 
-	credsRepo, err := db.NewSQLRepo("./db/api.db")
+	sqlDB, err := db.Open("./db/api.db")
+	if err != nil {
+		log.Fatalf("Failed to open sqlite database: %v", err)
+	}
+
+	credsRepo, err := db.NewSQLRepo(sqlDB)
 	if err != nil {
 		log.Fatalf("Failed to initialize sqlite credentials database: %v", err)
+	}
+
+	groupWatchRepo, err := db.NewGroupWatchRepo(sqlDB)
+	if err != nil {
+		log.Fatalf("Failed to initialize sqlite group watch database: %v", err)
 	}
 
 	waManager, err := whatsapp.NewWhatsMeowManager("./db/whatsapp.db")
@@ -83,11 +93,20 @@ func main() {
 		waManager,
 	)
 
+	groupWatcher := service.NewGroupWatcher(groupWatchRepo, waManager, matchingOrchestrator)
+	if err := groupWatcher.Bootstrap(context.Background()); err != nil {
+		log.Printf("Warning: failed to bootstrap group watchers: %v", err)
+	}
+	schedCtx, cancelSched := context.WithCancel(context.Background())
+	defer cancelSched()
+	go groupWatcher.RunScheduler(schedCtx)
+
 	procHandler := handler.NewProcessorHandler(matchingOrchestrator)
 	credsHandler := handler.NewCredentialsHandler(credsRepo, waManager)
+	groupHandler := handler.NewGroupWatchHandler(groupWatcher)
 
 	mux := http.NewServeMux()
-	router := handler.RegisterRoutes(mux, procHandler, credsHandler)
+	router := handler.RegisterRoutes(mux, procHandler, credsHandler, groupHandler)
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,

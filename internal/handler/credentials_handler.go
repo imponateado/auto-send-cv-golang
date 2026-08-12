@@ -110,6 +110,7 @@ func (h *CredentialsHandler) GetWhatsAppQR(w http.ResponseWriter, r *http.Reques
 	}
 
 	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(qrBytes)
 }
@@ -129,6 +130,17 @@ func (h *CredentialsHandler) GetWhatsAppStatus(w http.ResponseWriter, r *http.Re
 	}
 
 	respondWithJSON(w, http.StatusOK, status)
+}
+
+// ListWhatsAppConnections gerencia GET /api/v1/whatsapp/connections
+func (h *CredentialsHandler) ListWhatsAppConnections(w http.ResponseWriter, r *http.Request) {
+	statuses, err := h.waManager.ListConnected(r.Context())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to list connections: "+err.Error())
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, statuses)
 }
 
 // DisconnectWhatsApp gerencia POST /api/v1/whatsapp/disconnect?phone=...

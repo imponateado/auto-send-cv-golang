@@ -39,52 +39,133 @@ Para rodar os testes da aplicação:
 go test -v ./...
 ```
 
-### Efetuando uma Requisição
-Envie uma requisição HTTP POST para `/api/v1/process` contendo o JSON com as chaves:
-- `content`: Texto para processamento (opcional se enviar `file_base64`).
-- `delimiter`: Delimitador para divisão do texto (obrigatório se enviar `content`).
-- `file_base64`: String codificada em Base64 do arquivo de documento (opcional se enviar `content`).
+### Endpoints Disponíveis
 
-Exemplo usando `curl` enviando JSON com texto e arquivo Base64:
+A API expõe os seguintes endpoints sob `/api/v1`:
+
+| Método | Rota | Descrição |
+|---|---|---|
+| POST | `/api/v1/vacancies/clear` | Limpa o banco vetorial de vagas |
+| POST | `/api/v1/vacancies` | Popula o banco vetorial com vagas (assíncrono, retorna `task_id`) |
+| GET | `/api/v1/tasks/{id}` | Consulta o status de uma tarefa assíncrona |
+| POST | `/api/v1/match` | Faz o match de um currículo contra as vagas cadastradas |
+| POST | `/api/v1/credentials` | Registra credenciais OAuth2 (Google/Microsoft) de um candidato para envio de e-mail |
+| DELETE | `/api/v1/credentials/{email}` | Remove as credenciais de um candidato |
+| GET | `/api/v1/whatsapp/qr?phone=...` | Gera o QR Code para autenticação do WhatsApp (PNG) |
+| GET | `/api/v1/whatsapp/status?phone=...` | Consulta o status da sessão do WhatsApp |
+| POST | `/api/v1/whatsapp/disconnect?phone=...` | Desconecta a sessão do WhatsApp |
+| GET | `/swagger/` | Documentação interativa (Swagger UI) |
+
+### Fluxo Típico
+
+**1. Popular o banco de vagas** (texto bruto separado por delimitador):
 ```bash
-curl -X POST http://localhost:8080/api/v1/process \
+curl -X POST http://localhost:8080/api/v1/vacancies \
   -H "Content-Type: application/json" \
   -d '{
-    "content": "Linha 1\nLinha 2",
-    "delimiter": "\n",
-    "file_base64": "JVBERi0xLjQK"
+    "content": "Vaga 1: ...\nVaga 2: ...",
+    "delimiter": "\n"
   }'
 ```
+Retorno (`202 Accepted`):
+```json
+{
+  "status": "accepted",
+  "task_id": "b3f1...",
+  "message": "Vacancies processing started in background"
+}
+```
 
+**2. Acompanhar o processamento em background:**
+```bash
+curl http://localhost:8080/api/v1/tasks/b3f1...
+```
+```json
+{
+  "id": "b3f1...",
+  "status": "completed",
+  "items_processed": 10
+}
+```
+
+**3. Rodar o match de um currículo** (PDF em Base64) contra as vagas já indexadas:
+```bash
+curl -X POST http://localhost:8080/api/v1/match \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file_base64": "JVBERi0xLjQK",
+    "candidate_email": "candidato@example.com",
+    "candidate_phone": "5511999999999"
+  }'
+```
 Retorno esperado (JSON):
 ```json
 {
-  "bytes_processed": 15,
-  "items_processed": 2,
-  "items": [
-    "Linha 1",
-    "Linha 2"
-  ],
+  "bytes_processed": 9,
+  "items_processed": 1,
+  "items": ["..."],
   "file": {
     "size_in_bytes": 9,
     "mime_type": "application/pdf",
     "status": "decoded"
   },
+  "matches": [],
   "duration_ms": 0,
   "status": "success"
 }
 ```
 
+### Credenciais de E-mail (OAuth2) e WhatsApp
+
+Antes de disparar e-mails automáticos em nome do candidato, registre as credenciais OAuth2 (`google` ou `microsoft`) obtidas via consentimento do usuário:
+```bash
+curl -X POST http://localhost:8080/api/v1/credentials \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "candidato@example.com",
+    "provider": "google",
+    "refresh_token": "...",
+    "client_id": "...",
+    "client_secret": "..."
+  }'
+```
+As credenciais ficam armazenadas em `./db/api.db` (SQLite) e são usadas pelo `internal/infra/email/oauth.go` para renovar o access token na hora do envio.
+
+Para WhatsApp, autentique um número escaneando o QR Code retornado por `GET /api/v1/whatsapp/qr?phone=<numero>` (sessão gerenciada via `whatsmeow`, persistida em `./db/whatsapp.db`).
+
 ---
 
-## Integrações Disponíveis (Para uso futuro)
+## Integrações de Disparo
 
-O projeto inclui contratos de domínio e implementações de infraestrutura isoladas para duas integrações de envio de mensagens:
+O orquenstrador (`internal/service/orchestrator.go`) usa essas integrações para notificar candidatos automaticamente quando um match é confirmado pela LLM:
 
-### 1. Envio de E-mail (SMTP)
-Implementado em [smtp.go](file:///home/leonardo/Temp/api/internal/infra/email/smtp.go) seguindo o contrato `EmailService` ([email.go](file:///home/leonardo/Temp/api/internal/domain/email.go)).
-Permite disparar e-mails utilizando servidores SMTP padrão (ex: SendGrid, Mailgun, SES, Gmail) através do pacote nativo `net/smtp`.
+### 1. Envio de E-mail (OAuth2)
+Implementado em [`internal/infra/email/oauth.go`](internal/infra/email/oauth.go) seguindo o contrato `EmailService` ([`internal/domain/email.go`](internal/domain/email.go)).
+Autentica via OAuth2 (Google ou Microsoft) usando o refresh token do candidato, armazenado no SQLite através de `POST /api/v1/credentials`.
 
-### 2. Envio de WhatsApp (Meta Cloud API)
-Implementado em [client.go](file:///home/leonardo/Temp/api/internal/infra/whatsapp/client.go) seguindo o contrato `WhatsAppService` ([whatsapp.go](file:///home/leonardo/Temp/api/internal/domain/whatsapp.go)).
-Permite disparar mensagens HTTP POST diretamente para os endpoints oficiais da WhatsApp Cloud API da Meta.
+### 2. Envio de WhatsApp (whatsmeow)
+Implementado em [`internal/infra/whatsapp/whatsmeow.go`](internal/infra/whatsapp/whatsmeow.go) seguindo o contrato `WhatsAppService` ([`internal/domain/whatsapp.go`](internal/domain/whatsapp.go)).
+Usa a biblioteca [whatsmeow](https://github.com/tulir/whatsmeow) para manter uma sessão real do WhatsApp Web por número, persistida em `./db/whatsapp.db`.
+
+---
+
+## Frontend (Flutter)
+
+O diretório [`frontend/`](frontend/) contém um app Flutter (Web e Android) que consome esta API — é um projeto separado, não embutido no binário do Go. Como roda em origem/app diferente da API, o backend já expõe CORS liberado (`internal/handler/handler.go`) para viabilizar as chamadas.
+
+Cobre os 4 fluxos principais em abas: Vagas (clear/populate + acompanhamento da tarefa assíncrona), Match de currículo (upload de PDF), Credenciais de e-mail (OAuth2) e WhatsApp (QR code, status, desconexão).
+
+### Rodando em desenvolvimento
+```bash
+cd frontend
+flutter run -d chrome --dart-define=API_BASE=http://localhost:8080   # Web
+flutter run -d android --dart-define=API_BASE=http://<ip-da-api>:8080  # Android (emulador/device)
+```
+`API_BASE` aponta para onde a API Go está rodando (default: `http://localhost:8080`). Em um device Android físico, use o IP da máquina na rede local, não `localhost`.
+
+### Gerando os builds finais
+```bash
+cd frontend
+flutter build web                                    # gera frontend/build/web
+flutter build apk --dart-define=API_BASE=http://<ip-da-api>:8080   # gera o .apk em frontend/build/app/outputs/flutter-apk
+```

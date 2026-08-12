@@ -111,6 +111,23 @@ func (h *ProcessorHandler) GetTaskStatus(w http.ResponseWriter, r *http.Request)
 	respondWithJSON(w, http.StatusOK, task)
 }
 
+// ListTasks handles GET /api/v1/tasks
+// @Summary Lista todas as tarefas em background
+// @Description Retorna o estado de todas as tarefas assíncronas conhecidas (processando, concluídas ou falhas).
+// @Tags Tarefas
+// @Produce json
+// @Success 200 {array} domain.TaskStatus "Lista de tarefas"
+// @Router /api/v1/tasks [get]
+func (h *ProcessorHandler) ListTasks(w http.ResponseWriter, r *http.Request) {
+	tasks, err := h.orchestrator.ListTasks(r.Context())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to list tasks: "+err.Error())
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, tasks)
+}
+
 type matchRequest struct {
 	FileBase64     string `json:"file_base64"`
 	CandidateEmail string `json:"candidate_email,omitempty"`

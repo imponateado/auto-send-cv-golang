@@ -43,7 +43,7 @@ func NewOrchestrator(
 		newEmailService: func(creds *domain.EmailCredentials) domain.EmailService {
 			return email.NewOAuthEmailService(creds)
 		},
-		tasks:            make(map[string]*domain.TaskStatus),
+		tasks: make(map[string]*domain.TaskStatus),
 	}
 }
 
@@ -156,6 +156,14 @@ func (o *orchestrator) PopulateVacancies(ctx context.Context, content, delimiter
 		items = items[:len(items)-1]
 	}
 
+	return o.populateItems(ctx, items)
+}
+
+func (o *orchestrator) PopulateVacancyTexts(ctx context.Context, texts []string) (int, error) {
+	return o.populateItems(ctx, texts)
+}
+
+func (o *orchestrator) populateItems(ctx context.Context, items []string) (int, error) {
 	if len(items) == 0 {
 		return 0, nil
 	}
@@ -464,4 +472,16 @@ func (o *orchestrator) GetTaskStatus(ctx context.Context, taskID string) (*domai
 		ItemsProcessed: task.ItemsProcessed,
 		Error:          task.Error,
 	}, nil
+}
+
+func (o *orchestrator) ListTasks(ctx context.Context) ([]*domain.TaskStatus, error) {
+	o.tasksMu.RLock()
+	defer o.tasksMu.RUnlock()
+
+	tasks := make([]*domain.TaskStatus, 0, len(o.tasks))
+	for _, task := range o.tasks {
+		taskCopy := *task
+		tasks = append(tasks, &taskCopy)
+	}
+	return tasks, nil
 }

@@ -15,7 +15,9 @@ type mockOrchestrator struct {
 	clearFn         func(ctx context.Context) error
 	populateFn      func(ctx context.Context, content, delimiter string) (int, error)
 	populateAsyncFn func(ctx context.Context, content, delimiter string) (string, error)
+	populateTextsFn func(ctx context.Context, texts []string) (int, error)
 	taskStatusFn    func(ctx context.Context, taskID string) (*domain.TaskStatus, error)
+	listTasksFn     func(ctx context.Context) ([]*domain.TaskStatus, error)
 	matchFn         func(ctx context.Context, fileB64, fileMime, candidateEmail, candidatePhone string) (*domain.ProcessResult, error)
 }
 
@@ -40,11 +42,25 @@ func (m *mockOrchestrator) PopulateVacanciesAsync(ctx context.Context, content, 
 	return "task_123", nil
 }
 
+func (m *mockOrchestrator) PopulateVacancyTexts(ctx context.Context, texts []string) (int, error) {
+	if m.populateTextsFn != nil {
+		return m.populateTextsFn(ctx, texts)
+	}
+	return 0, nil
+}
+
 func (m *mockOrchestrator) GetTaskStatus(ctx context.Context, taskID string) (*domain.TaskStatus, error) {
 	if m.taskStatusFn != nil {
 		return m.taskStatusFn(ctx, taskID)
 	}
 	return &domain.TaskStatus{ID: taskID, Status: "completed"}, nil
+}
+
+func (m *mockOrchestrator) ListTasks(ctx context.Context) ([]*domain.TaskStatus, error) {
+	if m.listTasksFn != nil {
+		return m.listTasksFn(ctx)
+	}
+	return nil, nil
 }
 
 func (m *mockOrchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candidateEmail, candidatePhone string) (*domain.ProcessResult, error) {

@@ -14,13 +14,17 @@ type sqliteRepo struct {
 	db *sql.DB
 }
 
-// NewSQLRepo inicializa a conexão com o banco SQLite e garante que a tabela de credenciais exista.
-func NewSQLRepo(dbPath string) (domain.CredentialsRepository, error) {
+// Open abre a conexão com o arquivo SQLite compartilhado pelos vários repositórios da app.
+func Open(dbPath string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite database: %w", err)
 	}
+	return db, nil
+}
 
+// NewSQLRepo garante que a tabela de credenciais exista na conexão fornecida.
+func NewSQLRepo(db *sql.DB) (domain.CredentialsRepository, error) {
 	query := `
 	CREATE TABLE IF NOT EXISTS candidate_credentials (
 		email TEXT PRIMARY KEY,
@@ -30,9 +34,8 @@ func NewSQLRepo(dbPath string) (domain.CredentialsRepository, error) {
 		client_secret TEXT NOT NULL,
 		created_at DATETIME NOT NULL
 	);`
-	_, err = db.Exec(query)
+	_, err := db.Exec(query)
 	if err != nil {
-		db.Close()
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
