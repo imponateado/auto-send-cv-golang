@@ -3,8 +3,8 @@ package domain
 import "context"
 
 type Vacancy struct {
-	Index int
-	Text  string
+	Index int    `json:"index"`
+	Text  string `json:"text"`
 }
 
 type VectorStore interface {
@@ -12,4 +12,5 @@ type VectorStore interface {
 	HasVacancy(ctx context.Context, id string) (bool, error)
 	AddVacancies(ctx context.Context, vacancies []string, embeddings [][]float32) error
 	SearchSimilarity(ctx context.Context, queryEmbedding []float32, limit int, threshold float32) ([]Vacancy, error)
+	ListVacancies(ctx context.Context, queryEmbedding []float32) ([]Vacancy, error)
 }

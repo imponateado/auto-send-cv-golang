@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"testing"
-	"time"
 
 	"api/internal/domain"
 )
@@ -43,6 +42,7 @@ type mockVectorStore struct {
 	hasVacancyFn       func(ctx context.Context, id string) (bool, error)
 	addVacanciesFn     func(ctx context.Context, vacancies []string, embeddings [][]float32) error
 	searchSimilarityFn func(ctx context.Context, queryEmbedding []float32, limit int, threshold float32) ([]domain.Vacancy, error)
+	listVacanciesFn    func(ctx context.Context, queryEmbedding []float32) ([]domain.Vacancy, error)
 }
 
 func (m *mockVectorStore) Clear(ctx context.Context) error {
@@ -74,6 +74,13 @@ func (m *mockVectorStore) SearchSimilarity(ctx context.Context, queryEmbedding [
 		{Index: 0, Text: "vaga 1"},
 		{Index: 1, Text: "vaga 2"},
 	}, nil
+}
+
+func (m *mockVectorStore) ListVacancies(ctx context.Context, queryEmbedding []float32) ([]domain.Vacancy, error) {
+	if m.listVacanciesFn != nil {
+		return m.listVacanciesFn(ctx, queryEmbedding)
+	}
+	return nil, nil
 }
 
 type mockEmail struct {
@@ -142,7 +149,7 @@ func TestOrchestrator_Methods(t *testing.T) {
 		}
 	})
 
-	t.Run("PopulateVacancies splits, embeds and saves", func(t *testing.T) {
+	t.Run("PopulateVacancyTexts embeds and saves new vacancies", func(t *testing.T) {
 		addCalled := false
 		mStore := &mockVectorStore{
 			addVacanciesFn: func(ctx context.Context, vacancies []string, embeddings [][]float32) error {
@@ -155,7 +162,7 @@ func TestOrchestrator_Methods(t *testing.T) {
 		}
 
 		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, &mockWhatsApp{})
-		count, err := orch.PopulateVacancies(context.Background(), "vaga 1---vaga 2", "---")
+		count, err := orch.PopulateVacancyTexts(context.Background(), []string{"vaga 1", "vaga 2"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -167,7 +174,7 @@ func TestOrchestrator_Methods(t *testing.T) {
 		}
 	})
 
-	t.Run("PopulateVacancies skips existing vacancies", func(t *testing.T) {
+	t.Run("PopulateVacancyTexts skips existing vacancies", func(t *testing.T) {
 		addCalled := false
 		mStore := &mockVectorStore{
 			hasVacancyFn: func(ctx context.Context, id string) (bool, error) {
@@ -188,7 +195,7 @@ func TestOrchestrator_Methods(t *testing.T) {
 		}
 
 		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, &mockWhatsApp{})
-		count, err := orch.PopulateVacancies(context.Background(), "vaga 1---vaga 2", "---")
+		count, err := orch.PopulateVacancyTexts(context.Background(), []string{"vaga 1", "vaga 2"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -197,6 +204,73 @@ func TestOrchestrator_Methods(t *testing.T) {
 		}
 		if !addCalled {
 			t.Error("expected AddVacancies to be called on store")
+		}
+	})
+
+	t.Run("ListVacancies gets a placeholder embedding and delegates to store", func(t *testing.T) {
+		wantVacancies := []domain.Vacancy{{Index: 0, Text: "vaga 1"}, {Index: 1, Text: "vaga 2"}}
+		mGemini := &mockGemini{
+			embedFn: func(ctx context.Context, texts []string) ([][]float32, error) {
+				if len(texts) != 1 {
+					t.Errorf("expected exactly 1 placeholder text, got: %v", texts)
+				}
+				return [][]float32{{0.1, 0.2, 0.3}}, nil
+			},
+		}
+		mStore := &mockVectorStore{
+			listVacanciesFn: func(ctx context.Context, queryEmbedding []float32) ([]domain.Vacancy, error) {
+				if len(queryEmbedding) != 3 {
+					t.Errorf("expected placeholder embedding to be forwarded, got: %v", queryEmbedding)
+				}
+				return wantVacancies, nil
+			},
+		}
+
+		orch := NewOrchestrator(&mockGemini{}, mGemini, mStore, &mockCredsRepo{}, &mockWhatsApp{})
+		got, err := orch.ListVacancies(context.Background())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != len(wantVacancies) {
+			t.Errorf("expected %d vacancies, got: %d", len(wantVacancies), len(got))
+		}
+	})
+
+	t.Run("ListVacancies propagates embedding errors without calling the store", func(t *testing.T) {
+		storeCalled := false
+		mGemini := &mockGemini{
+			embedFn: func(ctx context.Context, texts []string) ([][]float32, error) {
+				return nil, fmt.Errorf("embedding service unavailable")
+			},
+		}
+		mStore := &mockVectorStore{
+			listVacanciesFn: func(ctx context.Context, queryEmbedding []float32) ([]domain.Vacancy, error) {
+				storeCalled = true
+				return nil, nil
+			},
+		}
+
+		orch := NewOrchestrator(&mockGemini{}, mGemini, mStore, &mockCredsRepo{}, &mockWhatsApp{})
+		_, err := orch.ListVacancies(context.Background())
+		if err == nil {
+			t.Fatal("expected error when embedding fails")
+		}
+		if storeCalled {
+			t.Error("expected vectorStore.ListVacancies not to be called when embedding fails")
+		}
+	})
+
+	t.Run("ListVacancies treats an empty embedding slice as an error", func(t *testing.T) {
+		mGemini := &mockGemini{
+			embedFn: func(ctx context.Context, texts []string) ([][]float32, error) {
+				return [][]float32{}, nil
+			},
+		}
+
+		orch := NewOrchestrator(&mockGemini{}, mGemini, &mockVectorStore{}, &mockCredsRepo{}, &mockWhatsApp{})
+		_, err := orch.ListVacancies(context.Background())
+		if err == nil {
+			t.Fatal("expected error when embedding service returns an empty slice")
 		}
 	})
 
@@ -258,33 +332,4 @@ func TestOrchestrator_Methods(t *testing.T) {
 		}
 	})
 
-	t.Run("PopulateVacanciesAsync starts task and GetTaskStatus retrieves it", func(t *testing.T) {
-		mStore := &mockVectorStore{
-			addVacanciesFn: func(ctx context.Context, vacancies []string, embeddings [][]float32) error {
-				return nil
-			},
-		}
-
-		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, &mockWhatsApp{})
-		taskID, err := orch.PopulateVacanciesAsync(context.Background(), "vaga 1---vaga 2", "---")
-		if err != nil {
-			t.Fatalf("unexpected error starting task: %v", err)
-		}
-		if taskID == "" {
-			t.Fatal("expected non-empty task ID")
-		}
-
-		time.Sleep(50 * time.Millisecond)
-
-		status, err := orch.GetTaskStatus(context.Background(), taskID)
-		if err != nil {
-			t.Fatalf("unexpected error fetching status: %v", err)
-		}
-		if status.ID != taskID {
-			t.Errorf("expected task ID %s, got %s", taskID, status.ID)
-		}
-		if status.Status != "completed" && status.Status != "processing" {
-			t.Errorf("unexpected task status: %s", status.Status)
-		}
-	})
 }

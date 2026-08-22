@@ -13,11 +13,8 @@ import (
 
 type mockOrchestrator struct {
 	clearFn         func(ctx context.Context) error
-	populateFn      func(ctx context.Context, content, delimiter string) (int, error)
-	populateAsyncFn func(ctx context.Context, content, delimiter string) (string, error)
 	populateTextsFn func(ctx context.Context, texts []string) (int, error)
-	taskStatusFn    func(ctx context.Context, taskID string) (*domain.TaskStatus, error)
-	listTasksFn     func(ctx context.Context) ([]*domain.TaskStatus, error)
+	listFn          func(ctx context.Context) ([]domain.Vacancy, error)
 	matchFn         func(ctx context.Context, fileB64, fileMime, candidateEmail, candidatePhone string) (*domain.ProcessResult, error)
 }
 
@@ -28,20 +25,6 @@ func (m *mockOrchestrator) ClearVacancies(ctx context.Context) error {
 	return nil
 }
 
-func (m *mockOrchestrator) PopulateVacancies(ctx context.Context, content, delimiter string) (int, error) {
-	if m.populateFn != nil {
-		return m.populateFn(ctx, content, delimiter)
-	}
-	return 0, nil
-}
-
-func (m *mockOrchestrator) PopulateVacanciesAsync(ctx context.Context, content, delimiter string) (string, error) {
-	if m.populateAsyncFn != nil {
-		return m.populateAsyncFn(ctx, content, delimiter)
-	}
-	return "task_123", nil
-}
-
 func (m *mockOrchestrator) PopulateVacancyTexts(ctx context.Context, texts []string) (int, error) {
 	if m.populateTextsFn != nil {
 		return m.populateTextsFn(ctx, texts)
@@ -49,16 +32,9 @@ func (m *mockOrchestrator) PopulateVacancyTexts(ctx context.Context, texts []str
 	return 0, nil
 }
 
-func (m *mockOrchestrator) GetTaskStatus(ctx context.Context, taskID string) (*domain.TaskStatus, error) {
-	if m.taskStatusFn != nil {
-		return m.taskStatusFn(ctx, taskID)
-	}
-	return &domain.TaskStatus{ID: taskID, Status: "completed"}, nil
-}
-
-func (m *mockOrchestrator) ListTasks(ctx context.Context) ([]*domain.TaskStatus, error) {
-	if m.listTasksFn != nil {
-		return m.listTasksFn(ctx)
+func (m *mockOrchestrator) ListVacancies(ctx context.Context) ([]domain.Vacancy, error) {
+	if m.listFn != nil {
+		return m.listFn(ctx)
 	}
 	return nil, nil
 }
@@ -98,64 +74,21 @@ func TestProcessorHandler_Clear(t *testing.T) {
 	})
 }
 
-func TestProcessorHandler_Populate(t *testing.T) {
-	t.Run("Successful populate (async)", func(t *testing.T) {
-		populateCalled := false
+func TestProcessorHandler_List(t *testing.T) {
+	t.Run("Successful list", func(t *testing.T) {
+		listCalled := false
 		mockOrch := &mockOrchestrator{
-			populateAsyncFn: func(ctx context.Context, content, delimiter string) (string, error) {
-				populateCalled = true
-				return "task_123", nil
+			listFn: func(ctx context.Context) ([]domain.Vacancy, error) {
+				listCalled = true
+				return []domain.Vacancy{{Index: 0, Text: "vaga 1"}}, nil
 			},
 		}
 
 		h := NewProcessorHandler(mockOrch)
-		jsonReq := `{"content": "vaga1---vaga2", "delimiter": "---"}`
-		req := httptest.NewRequest("POST", "/api/v1/vacancies", strings.NewReader(jsonReq))
+		req := httptest.NewRequest("GET", "/api/v1/vacancies", nil)
 		w := httptest.NewRecorder()
 
-		h.Populate(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusAccepted {
-			t.Errorf("expected status 202, got: %d", resp.StatusCode)
-		}
-		if !populateCalled {
-			t.Error("expected PopulateVacanciesAsync to be called on orchestrator")
-		}
-
-		var res map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&res)
-		if res["status"] != "accepted" || res["task_id"] != "task_123" {
-			t.Errorf("unexpected response content: %v", res)
-		}
-	})
-}
-
-func TestProcessorHandler_GetTaskStatus(t *testing.T) {
-	t.Run("Successful get task status", func(t *testing.T) {
-		statusCalled := false
-		mockOrch := &mockOrchestrator{
-			taskStatusFn: func(ctx context.Context, taskID string) (*domain.TaskStatus, error) {
-				statusCalled = true
-				if taskID != "task_999" {
-					t.Errorf("expected task_999, got %s", taskID)
-				}
-				return &domain.TaskStatus{
-					ID:             "task_999",
-					Status:         "completed",
-					ItemsProcessed: 3,
-				}, nil
-			},
-		}
-
-		h := NewProcessorHandler(mockOrch)
-		req := httptest.NewRequest("GET", "/api/v1/tasks/task_999", nil)
-		req.SetPathValue("id", "task_999")
-		w := httptest.NewRecorder()
-
-		h.GetTaskStatus(w, req)
+		h.List(w, req)
 
 		resp := w.Result()
 		defer resp.Body.Close()
@@ -163,14 +96,35 @@ func TestProcessorHandler_GetTaskStatus(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("expected status 200, got: %d", resp.StatusCode)
 		}
-		if !statusCalled {
-			t.Error("expected GetTaskStatus to be called on orchestrator")
+		if !listCalled {
+			t.Error("expected ListVacancies to be called on orchestrator")
 		}
 
-		var res domain.TaskStatus
+		var res []domain.Vacancy
 		json.NewDecoder(resp.Body).Decode(&res)
-		if res.ID != "task_999" || res.Status != "completed" || res.ItemsProcessed != 3 {
-			t.Errorf("unexpected task response: %+v", res)
+		if len(res) != 1 || res[0].Text != "vaga 1" {
+			t.Errorf("unexpected list response: %+v", res)
+		}
+	})
+
+	t.Run("Failure returns 500", func(t *testing.T) {
+		mockOrch := &mockOrchestrator{
+			listFn: func(ctx context.Context) ([]domain.Vacancy, error) {
+				return nil, context.DeadlineExceeded
+			},
+		}
+
+		h := NewProcessorHandler(mockOrch)
+		req := httptest.NewRequest("GET", "/api/v1/vacancies", nil)
+		w := httptest.NewRecorder()
+
+		h.List(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusInternalServerError {
+			t.Errorf("expected status 500, got: %d", resp.StatusCode)
 		}
 	})
 }

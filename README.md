@@ -46,8 +46,7 @@ A API expõe os seguintes endpoints sob `/api/v1`:
 | Método | Rota | Descrição |
 |---|---|---|
 | POST | `/api/v1/vacancies/clear` | Limpa o banco vetorial de vagas |
-| POST | `/api/v1/vacancies` | Popula o banco vetorial com vagas (assíncrono, retorna `task_id`) |
-| GET | `/api/v1/tasks/{id}` | Consulta o status de uma tarefa assíncrona |
+| GET | `/api/v1/vacancies` | Lista todas as vagas atualmente no banco vetorial |
 | POST | `/api/v1/match` | Faz o match de um currículo contra as vagas cadastradas |
 | POST | `/api/v1/credentials` | Registra credenciais OAuth2 (Google/Microsoft) de um candidato para envio de e-mail |
 | DELETE | `/api/v1/credentials/{email}` | Remove as credenciais de um candidato |
@@ -58,37 +57,18 @@ A API expõe os seguintes endpoints sob `/api/v1`:
 
 ### Fluxo Típico
 
-**1. Popular o banco de vagas** (texto bruto separado por delimitador):
+**1. Conferir as vagas já indexadas no banco vetorial:**
 ```bash
-curl -X POST http://localhost:8080/api/v1/vacancies \
-  -H "Content-Type: application/json" \
-  -d '{
-    "content": "Vaga 1: ...\nVaga 2: ...",
-    "delimiter": "\n"
-  }'
-```
-Retorno (`202 Accepted`):
-```json
-{
-  "status": "accepted",
-  "task_id": "b3f1...",
-  "message": "Vacancies processing started in background"
-}
-```
-
-**2. Acompanhar o processamento em background:**
-```bash
-curl http://localhost:8080/api/v1/tasks/b3f1...
+curl http://localhost:8080/api/v1/vacancies
 ```
 ```json
-{
-  "id": "b3f1...",
-  "status": "completed",
-  "items_processed": 10
-}
+[
+  { "index": 0, "text": "Vaga 1: ..." },
+  { "index": 1, "text": "Vaga 2: ..." }
+]
 ```
 
-**3. Rodar o match de um currículo** (PDF em Base64) contra as vagas já indexadas:
+**2. Rodar o match de um currículo** (PDF em Base64) contra as vagas já indexadas:
 ```bash
 curl -X POST http://localhost:8080/api/v1/match \
   -H "Content-Type: application/json" \

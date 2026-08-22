@@ -29,18 +29,6 @@
   <!-- VAGAS -->
   <section id="vagas" class="tab-panel active">
     <div class="card">
-      <h2>Popular vagas (assíncrono)</h2>
-      <form id="populateForm">
-        <label for="populateFile">Arquivo (.txt) com todas as vagas</label>
-        <input id="populateFile" type="file" accept=".txt,text/plain" required>
-        <label for="populateDelimiter">Delimitador</label>
-        <input id="populateDelimiter" type="text" placeholder="🎀" value="🎀" required>
-        <button type="submit">Popular vagas</button>
-      </form>
-      <div id="populateResult" class="result"></div>
-    </div>
-
-    <div class="card">
       <h2>Limpar banco de vagas</h2>
       <p class="hint">Remove todas as vagas e coleções do banco vetorial local.</p>
       <button id="clearBtn" class="danger">Limpar vagas</button>
@@ -48,19 +36,9 @@
     </div>
 
     <div class="card">
-      <h2>Status de tarefa</h2>
-      <form id="taskForm">
-        <label for="taskId">Task ID</label>
-        <input id="taskId" type="text" placeholder="ID retornado ao popular vagas" required>
-        <button type="submit">Consultar status</button>
-      </form>
-      <div id="taskResult" class="result"></div>
-    </div>
-
-    <div class="card">
-      <h2>Listar tarefas</h2>
-      <button id="tasksListBtn">Listar tarefas</button>
-      <div id="tasksListResult" class="result"></div>
+      <h2>Listar vagas</h2>
+      <button id="listVacanciesBtn">Listar vagas</button>
+      <div id="listVacanciesResult" class="result"></div>
     </div>
   </section>
 

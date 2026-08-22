@@ -70,15 +70,6 @@ function fileToBase64(file) {
   });
 }
 
-function fileToText(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsText(file);
-  });
-}
-
 async function handle(el, fn) {
   try {
     renderMsg(el, 'Carregando...', 'info');
@@ -89,23 +80,6 @@ async function handle(el, fn) {
 }
 
 // ---------- Vagas ----------
-document.getElementById('populateForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const el = document.getElementById('populateResult');
-  await handle(el, async () => {
-    const file = document.getElementById('populateFile').files[0];
-    if (!file) throw new Error('Selecione um arquivo .txt');
-    const content = await fileToText(file);
-    const delimiter = document.getElementById('populateDelimiter').value;
-    const data = await api('/api/v1/vacancies', {
-      method: 'POST',
-      body: JSON.stringify({ content, delimiter }),
-    });
-    renderJson(el, data);
-    if (data.task_id) document.getElementById('taskId').value = data.task_id;
-  });
-});
-
 document.getElementById('clearBtn').addEventListener('click', async () => {
   const el = document.getElementById('clearResult');
   await handle(el, async () => {
@@ -114,31 +88,16 @@ document.getElementById('clearBtn').addEventListener('click', async () => {
   });
 });
 
-document.getElementById('taskForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const el = document.getElementById('taskResult');
+document.getElementById('listVacanciesBtn').addEventListener('click', async () => {
+  const el = document.getElementById('listVacanciesResult');
   await handle(el, async () => {
-    const id = document.getElementById('taskId').value.trim();
-    const data = await api(`/api/v1/tasks/${encodeURIComponent(id)}`);
-    renderJson(el, data);
-  });
-});
-
-document.getElementById('tasksListBtn').addEventListener('click', async () => {
-  const el = document.getElementById('tasksListResult');
-  await handle(el, async () => {
-    const data = await api('/api/v1/tasks');
+    const data = await api('/api/v1/vacancies');
     if (!data || !data.length) {
-      renderMsg(el, 'Nenhuma tarefa encontrada', 'info');
+      renderMsg(el, 'Nenhuma vaga encontrada', 'info');
       return;
     }
-    const rows = data.map((t) => `<tr>
-      <td>${escapeHtml(t.id)}</td>
-      <td>${escapeHtml(t.status)}</td>
-      <td>${escapeHtml(t.items_processed)}</td>
-      <td>${escapeHtml(t.error || '-')}</td>
-    </tr>`).join('');
-    el.innerHTML = `<table><thead><tr><th>ID</th><th>Status</th><th>Itens processados</th><th>Erro</th></tr></thead><tbody>${rows}</tbody></table>`;
+    const rows = data.map((v) => `<tr><td>${escapeHtml(v.index)}</td><td>${escapeHtml(v.text)}</td></tr>`).join('');
+    el.innerHTML = `<table><thead><tr><th>Índice</th><th>Texto</th></tr></thead><tbody>${rows}</tbody></table>`;
   });
 });
 

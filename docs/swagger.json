@@ -55,81 +55,28 @@
                 }
             }
         },
-        "/api/v1/tasks/{id}": {
-            "get": {
-                "description": "Retorna o estado atual de processamento de uma tarefa assíncrona (como a geração de embeddings de vagas).",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Tarefas"
-                ],
-                "summary": "Consulta o status de uma tarefa em background",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "ID da tarefa",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Informações e status da tarefa",
-                        "schema": {
-                            "$ref": "#/definitions/domain.TaskStatus"
-                        }
-                    },
-                    "404": {
-                        "description": "Tarefa não encontrada",
-                        "schema": {
-                            "$ref": "#/definitions/domain.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/api/v1/vacancies": {
-            "post": {
-                "description": "Recebe uma lista de vagas em texto bruto e um delimitador. Inicia a divisão do texto, gera os embeddings vetoriais via Ollama em background e as salva no banco vetorial local (chromem-go). Retorna imediatamente com o task_id.",
-                "consumes": [
-                    "application/json"
-                ],
+            "get": {
+                "description": "Retorna todas as vagas atualmente armazenadas no banco vetorial local (chromem-go).",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Vagas"
                 ],
-                "summary": "Popula o banco vetorial de vagas (Assíncrono)",
-                "parameters": [
-                    {
-                        "description": "Payload com as vagas e delimitador",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handler.populateRequest"
-                        }
-                    }
-                ],
+                "summary": "Lista todas as vagas do banco vetorial",
                 "responses": {
-                    "202": {
-                        "description": "Tarefa de população iniciada com sucesso",
+                    "200": {
+                        "description": "Lista de vagas",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "400": {
-                        "description": "Requisição inválida",
-                        "schema": {
-                            "$ref": "#/definitions/domain.ErrorResponse"
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/domain.Vacancy"
+                            }
                         }
                     },
                     "500": {
-                        "description": "Erro ao processar e salvar vagas",
+                        "description": "Erro interno ao listar vagas",
                         "schema": {
                             "$ref": "#/definitions/domain.ErrorResponse"
                         }
@@ -247,20 +194,13 @@
                 }
             }
         },
-        "domain.TaskStatus": {
+        "domain.Vacancy": {
             "type": "object",
             "properties": {
-                "error": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "items_processed": {
+                "index": {
                     "type": "integer"
                 },
-                "status": {
-                    "description": "\"processing\", \"completed\", \"failed\"",
+                "text": {
                     "type": "string"
                 }
             }
@@ -269,17 +209,6 @@
             "type": "object",
             "properties": {
                 "file_base64": {
-                    "type": "string"
-                }
-            }
-        },
-        "handler.populateRequest": {
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "string"
-                },
-                "delimiter": {
                     "type": "string"
                 }
             }

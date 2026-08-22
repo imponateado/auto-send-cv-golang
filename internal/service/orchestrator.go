@@ -10,7 +10,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"api/internal/domain"
@@ -24,8 +23,6 @@ type orchestrator struct {
 	credsRepo        domain.CredentialsRepository
 	waManager        domain.WhatsAppManager
 	newEmailService  func(creds *domain.EmailCredentials) domain.EmailService
-	tasksMu          sync.RWMutex
-	tasks            map[string]*domain.TaskStatus
 }
 
 func NewOrchestrator(
@@ -44,7 +41,6 @@ func NewOrchestrator(
 		newEmailService: func(creds *domain.EmailCredentials) domain.EmailService {
 			return email.NewOAuthEmailService(creds)
 		},
-		tasks: make(map[string]*domain.TaskStatus),
 	}
 }
 
@@ -142,28 +138,19 @@ func (o *orchestrator) ClearVacancies(ctx context.Context) error {
 	return o.vectorStore.Clear(ctx)
 }
 
-// PopulateVacancies fatia content pelo delimiter, gera embeddings para as vagas
-// novas e as insere no banco vetorial local. Retorna a quantidade de vagas
-// inseridas e um erro se content/delimiter estiverem vazios ou se a geração de
-// embeddings/inserção falhar.
-func (o *orchestrator) PopulateVacancies(ctx context.Context, content, delimiter string) (int, error) {
-	if content == "" {
-		return 0, fmt.Errorf("content cannot be empty")
-	}
-	if delimiter == "" {
-		return 0, fmt.Errorf("delimiter cannot be empty")
-	}
-
-	items := strings.Split(content, delimiter)
-	if len(items) > 0 && items[len(items)-1] == "" {
-		items = items[:len(items)-1]
-	}
-
-	return o.populateItems(ctx, items)
-}
-
 func (o *orchestrator) PopulateVacancyTexts(ctx context.Context, texts []string) (int, error) {
 	return o.populateItems(ctx, texts)
+}
+
+// ListVacancies retorna todas as vagas atualmente armazenadas no banco vetorial
+// local. Retorna erro se a geração do embedding de referência ou a consulta ao
+// banco vetorial falhar.
+func (o *orchestrator) ListVacancies(ctx context.Context) ([]domain.Vacancy, error) {
+	embs, err := o.embeddingService.GetEmbeddings(ctx, []string{"."})
+	if err != nil || len(embs) == 0 {
+		return nil, fmt.Errorf("failed to get placeholder embedding: %w", err)
+	}
+	return o.vectorStore.ListVacancies(ctx, embs[0])
 }
 
 func (o *orchestrator) populateItems(ctx context.Context, items []string) (int, error) {
@@ -421,70 +408,3 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 	}, nil
 }
 
-// PopulateVacanciesAsync dispara PopulateVacancies em background e retorna
-// imediatamente o taskID gerado (sempre sem erro; falhas do processamento em si
-// ficam no TaskStatus, consultável via GetTaskStatus).
-func (o *orchestrator) PopulateVacanciesAsync(ctx context.Context, content, delimiter string) (string, error) {
-	taskID := fmt.Sprintf("task_%d", time.Now().UnixNano())
-
-	task := &domain.TaskStatus{
-		ID:     taskID,
-		Status: "processing",
-	}
-
-	o.tasksMu.Lock()
-	o.tasks[taskID] = task
-	o.tasksMu.Unlock()
-
-	go func() {
-		log.Printf("[Orchestrator] Iniciando processamento em background da tarefa %s...", taskID)
-		count, err := o.PopulateVacancies(context.Background(), content, delimiter)
-
-		o.tasksMu.Lock()
-		defer o.tasksMu.Unlock()
-
-		if err != nil {
-			log.Printf("[Orchestrator] Tarefa %s falhou: %v. Vagas processadas antes do erro: %d", taskID, err, count)
-			task.Status = "failed"
-			task.Error = err.Error()
-			task.ItemsProcessed = count
-		} else {
-			log.Printf("[Orchestrator] Tarefa %s concluída com sucesso. %d vagas processadas.", taskID, count)
-			task.Status = "completed"
-			task.ItemsProcessed = count
-		}
-	}()
-
-	return taskID, nil
-}
-
-// GetTaskStatus busca o TaskStatus de uma tarefa ativa ou concluída pelo taskID.
-// Retorna uma cópia thread-safe do estado, ou erro se o taskID não existir.
-func (o *orchestrator) GetTaskStatus(ctx context.Context, taskID string) (*domain.TaskStatus, error) {
-	o.tasksMu.RLock()
-	defer o.tasksMu.RUnlock()
-
-	task, exists := o.tasks[taskID]
-	if !exists {
-		return nil, fmt.Errorf("task %s not found", taskID)
-	}
-
-	return &domain.TaskStatus{
-		ID:             task.ID,
-		Status:         task.Status,
-		ItemsProcessed: task.ItemsProcessed,
-		Error:          task.Error,
-	}, nil
-}
-
-func (o *orchestrator) ListTasks(ctx context.Context) ([]*domain.TaskStatus, error) {
-	o.tasksMu.RLock()
-	defer o.tasksMu.RUnlock()
-
-	tasks := make([]*domain.TaskStatus, 0, len(o.tasks))
-	for _, task := range o.tasks {
-		taskCopy := *task
-		tasks = append(tasks, &taskCopy)
-	}
-	return tasks, nil
-}

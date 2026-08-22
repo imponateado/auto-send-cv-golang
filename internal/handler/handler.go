@@ -30,10 +30,8 @@ func (rw *responseWriter) WriteHeader(code int) {
 // para ser servido.
 func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler, credsHandler *CredentialsHandler, groupHandler *GroupWatchHandler) http.Handler {
 	mux.HandleFunc("POST /api/v1/vacancies/clear", procHandler.Clear)
-	mux.HandleFunc("POST /api/v1/vacancies", procHandler.Populate)
+	mux.HandleFunc("GET /api/v1/vacancies", procHandler.List)
 	mux.HandleFunc("POST /api/v1/match", procHandler.Match)
-	mux.HandleFunc("GET /api/v1/tasks", procHandler.ListTasks)
-	mux.HandleFunc("GET /api/v1/tasks/{id}", procHandler.GetTaskStatus)
 
 	mux.HandleFunc("POST /api/v1/credentials", credsHandler.RegisterCredentials)
 	mux.HandleFunc("DELETE /api/v1/credentials/{email}", credsHandler.DeleteCredentials)

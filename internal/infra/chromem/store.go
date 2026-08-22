@@ -122,3 +122,31 @@ func (s *chromemStore) SearchSimilarity(ctx context.Context, queryEmbedding []fl
 	log.Printf("[ChromeStore] Busca vetorial concluída: %d de %d vagas bateram com o limite (threshold)", len(matchedVacancies), len(results))
 	return matchedVacancies, nil
 }
+
+// ponytail: chromem-go v0.7.0 não tem API nativa de "listar tudo" (sem
+// ListIDs/Iterate/GetAll). Pedimos exatamente Count() resultados via
+// QueryEmbedding, que devolve todos os documentos independente da ordenação
+// por similaridade — o vetor de consulta só serve pra bater a dimensão
+// esperada pela lib. Upgrade path: trocar por uma API nativa de listagem se a
+// lib um dia adicionar uma.
+func (s *chromemStore) ListVacancies(ctx context.Context, queryEmbedding []float32) ([]domain.Vacancy, error) {
+	count := s.collection.Count()
+	if count == 0 {
+		return []domain.Vacancy{}, nil
+	}
+
+	results, err := s.collection.QueryEmbedding(ctx, queryEmbedding, count, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("chromem list query failed: %w", err)
+	}
+
+	vacancies := make([]domain.Vacancy, 0, len(results))
+	for _, res := range results {
+		var origIdx int
+		if _, err := fmt.Sscanf(res.Metadata["index"], "%d", &origIdx); err != nil {
+			origIdx = 0
+		}
+		vacancies = append(vacancies, domain.Vacancy{Index: origIdx, Text: res.Content})
+	}
+	return vacancies, nil
+}

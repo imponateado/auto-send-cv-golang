@@ -70,26 +70,15 @@ type mockOrchestrator struct {
 
 func (m *mockOrchestrator) ClearVacancies(ctx context.Context) error { return nil }
 
-func (m *mockOrchestrator) PopulateVacancies(ctx context.Context, content, delimiter string) (int, error) {
-	return 0, nil
-}
-
-func (m *mockOrchestrator) PopulateVacanciesAsync(ctx context.Context, content, delimiter string) (string, error) {
-	return "", nil
-}
-
 func (m *mockOrchestrator) PopulateVacancyTexts(ctx context.Context, texts []string) (int, error) {
 	m.calls.Add(1)
 	return len(texts), nil
 }
 
-func (m *mockOrchestrator) GetTaskStatus(ctx context.Context, taskID string) (*domain.TaskStatus, error) {
+func (m *mockOrchestrator) ListVacancies(ctx context.Context) ([]domain.Vacancy, error) {
 	return nil, nil
 }
 
-func (m *mockOrchestrator) ListTasks(ctx context.Context) ([]*domain.TaskStatus, error) {
-	return nil, nil
-}
 func (m *mockOrchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candidateEmail, candidatePhone string) (*domain.ProcessResult, error) {
 	return nil, nil
 }
