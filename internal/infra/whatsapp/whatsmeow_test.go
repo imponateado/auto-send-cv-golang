@@ -45,3 +45,28 @@ func TestExtractText(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildRecipientJID(t *testing.T) {
+	cases := []struct {
+		name string
+		to   string
+		want string
+	}{
+		{name: "already a JID", to: "5561992055310@s.whatsapp.net", want: "5561992055310@s.whatsapp.net"},
+		{name: "formatted BR number without country code", to: "(61) 99205-5310", want: "5561992055310@s.whatsapp.net"},
+		{name: "plain digits without country code", to: "61992055310", want: "5561992055310@s.whatsapp.net"},
+		{name: "already has country code", to: "5561992055310", want: "5561992055310@s.whatsapp.net"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := buildRecipientJID(tc.to)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.String() != tc.want {
+				t.Errorf("buildRecipientJID(%q) = %q, want %q", tc.to, got.String(), tc.want)
+			}
+		})
+	}
+}

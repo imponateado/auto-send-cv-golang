@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"api/internal/domain"
+
 	"github.com/skip2/go-qrcode"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -17,8 +18,8 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
-	_ "modernc.org/sqlite"
 	"google.golang.org/protobuf/proto"
+	_ "modernc.org/sqlite"
 )
 
 type WhatsMeowManager struct {
@@ -31,13 +32,9 @@ type WhatsMeowManager struct {
 	groupHandlersMu sync.Mutex
 }
 
-// GroupMessageCallback é invocado para cada mensagem de texto vista num
-// grupo observado para o phone dado. O texto já vem extraído; mensagens
-// vazias/não-texto são filtradas antes desta chamada.
 type GroupMessageCallback func(phone string, msg domain.BufferedMessage)
 
 func NewWhatsMeowManager(dbPath string) (*WhatsMeowManager, error) {
-	// sqlstore.New takes context, dialect, dsn, and logger in this version
 	container, err := sqlstore.New(context.Background(), "sqlite", "file:"+dbPath+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)", waLog.Stdout("Database", "WARN", true))
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize whatsmeow sqlstore: %w", err)
@@ -61,12 +58,16 @@ func (m *WhatsMeowManager) EnsureClient(ctx context.Context, phone string) (*wha
 		}
 		err := cli.Connect()
 		if err != nil {
-			return nil, fmt.Errorf("failed to connect existing whatsmeow client: %w", err)
+			if errors.Is(err, store.ErrDeviceDeleted) {
+				delete(m.clients, phone)
+			} else {
+				return nil, fmt.Errorf("failed to connect existing whatsmeow client: %w", err)
+			}
+		} else {
+			return cli, nil
 		}
-		return cli, nil
 	}
 
-	// GetAllDevices takes context
 	devices, err := m.container.GetAllDevices(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list devices from db: %w", err)
@@ -107,19 +108,10 @@ func (m *WhatsMeowManager) GetQR(ctx context.Context, phone string) ([]byte, err
 		return nil, errors.New("already authenticated")
 	}
 
-	// whatsmeow requires GetQRChannel to be called before Connect. EnsureClient
-	// auto-connects any pre-existing, not-yet-logged-in client (e.g. left over
-	// from a previous QR attempt that expired), so a retry here can find a
-	// client that's already connecting/connected. Reset it before asking for
-	// a fresh QR channel.
 	if cli.IsConnected() {
 		cli.Disconnect()
 	}
 
-	// The QR channel and the connection it drives must outlive this HTTP
-	// request: whatsmeow disconnects the client as soon as the context it
-	// was given is cancelled, which happens the instant this handler
-	// returns if we used the request's context here.
 	pairCtx := context.Background()
 
 	qrChan, err := cli.GetQRChannel(pairCtx)
@@ -139,10 +131,6 @@ func (m *WhatsMeowManager) GetQR(ctx context.Context, phone string) ([]byte, err
 		}()
 	}
 
-	// WhatsApp rotates the QR code roughly every 20s (60s for the last one)
-	// and disconnects the client once 8 unread codes pile up in the channel,
-	// so this must keep draining qrChan for the whole pairing attempt rather
-	// than reading a single code and abandoning the rest.
 	firstCode := make(chan string, 1)
 	go func() {
 		gotFirst := false
@@ -203,9 +191,9 @@ func (m *WhatsMeowManager) GetStatus(ctx context.Context, phone string) (domain.
 	}, nil
 }
 
-// ListConnected returns one entry per phone number that has ever completed
-// WhatsApp pairing (i.e. has a device persisted in the store), without the
-// side effect of connecting clients that aren't already running.
+// ListConnected lê todos os devices persistidos no store, sem conectar nenhum
+// client que não esteja já rodando. Retorna um domain.WhatsAppStatus por
+// número já pareado, ou erro se a leitura do store falhar.
 func (m *WhatsMeowManager) ListConnected(ctx context.Context) ([]domain.WhatsAppStatus, error) {
 	devices, err := m.container.GetAllDevices(ctx)
 	if err != nil {
@@ -244,7 +232,9 @@ func (m *WhatsMeowManager) ListConnected(ctx context.Context) ([]domain.WhatsApp
 	return statuses, nil
 }
 
-// ListJoinedGroups retorna os grupos dos quais a conta do phone dado é membro.
+// ListJoinedGroups consulta os grupos do WhatsApp de que a conta de phone é
+// membro. Retorna a lista de domain.GroupInfo, ou erro se a conexão ou a
+// consulta falhar.
 func (m *WhatsMeowManager) ListJoinedGroups(ctx context.Context, phone string) ([]domain.GroupInfo, error) {
 	cli, err := m.EnsureClient(ctx, phone)
 	if err != nil {
@@ -263,10 +253,9 @@ func (m *WhatsMeowManager) ListJoinedGroups(ctx context.Context, phone string) (
 	return infos, nil
 }
 
-// WatchGroups (re)instala o handler de mensagens de grupo para o phone dado,
-// encaminhando mensagens de texto de qualquer JID em watchedJIDs para
-// onMessage. Chamar de novo sempre que o conjunto observado mudar — remove
-// o handler anterior antes de instalar o novo.
+// WatchGroups substitui o handler de mensagens de grupo de phone por um novo,
+// que encaminha para onMessage qualquer mensagem de texto vinda de um JID em
+// watchedJIDs. Retorna erro apenas se obter/conectar o client falhar.
 func (m *WhatsMeowManager) WatchGroups(ctx context.Context, phone string, watchedJIDs []string, onMessage GroupMessageCallback) error {
 	cli, err := m.EnsureClient(ctx, phone)
 	if err != nil {
@@ -311,9 +300,9 @@ func (m *WhatsMeowManager) WatchGroups(ctx context.Context, phone string, watche
 	return nil
 }
 
-// extractText extrai o texto puro de uma mensagem do whatsmeow, cobrindo
-// apenas conversas simples e respostas/links formatados (ExtendedTextMessage).
-// Legendas de mídia (imagem/documento/vídeo) ficam fora do escopo por ora.
+// extractText extrai o texto de uma mensagem do whatsmeow, cobrindo conversas
+// simples e respostas/links formatados. Retorna string vazia se msg for nil ou
+// não tiver texto extraível.
 func extractText(msg *waE2E.Message) string {
 	if msg == nil {
 		return ""
@@ -324,21 +313,66 @@ func extractText(msg *waE2E.Message) string {
 	return msg.GetExtendedTextMessage().GetText()
 }
 
+// buildRecipientJID parses to as a JID directly if it already contains "@"
+// (types.ParseJID never errors on a bare string, it just misassigns it to the
+// Server field, so that check can't be inferred from ParseJID's return error).
+// Otherwise it treats to as a phone number: strips non-digit characters and,
+// ponytail: assumes Brazil (prefixes "55") when the result looks like a local
+// number without a country code (<=11 digits) — upgrade path: make the default
+// country code configurable if targets outside Brazil are ever needed.
+func buildRecipientJID(to string) (types.JID, error) {
+	if strings.Contains(to, "@") {
+		return types.ParseJID(to)
+	}
+
+	digits := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, to)
+
+	if len(digits) <= 11 {
+		digits = "55" + digits
+	}
+
+	return types.ParseJID(digits + "@s.whatsapp.net")
+}
+
 func (m *WhatsMeowManager) Disconnect(ctx context.Context, phone string) error {
 	m.clientsMu.Lock()
 	defer m.clientsMu.Unlock()
 
 	cli, exists := m.clients[phone]
 	if !exists {
-		return nil
-	}
+		devices, err := m.container.GetAllDevices(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to list devices from db: %w", err)
+		}
 
-	if cli.IsConnected() {
-		cli.Disconnect()
+		var devStore *store.Device
+		for _, dev := range devices {
+			if dev.ID != nil && dev.ID.User == phone {
+				devStore = dev
+				break
+			}
+		}
+		if devStore == nil {
+			return nil
+		}
+
+		cli = whatsmeow.NewClient(devStore, waLog.Stdout("Client", "DEBUG", true))
 	}
 
 	if cli.Store.ID != nil {
-		_ = cli.Logout(ctx)
+		if err := cli.Logout(ctx); err != nil {
+			cli.Disconnect()
+			if delErr := cli.Store.Delete(ctx); delErr != nil {
+				return fmt.Errorf("failed to force-delete device after logout error (%v): %w", err, delErr)
+			}
+		}
+	} else if cli.IsConnected() {
+		cli.Disconnect()
 	}
 
 	delete(m.clients, phone)
@@ -366,14 +400,9 @@ func (m *WhatsMeowManager) SendMessage(ctx context.Context, phoneSender string, 
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	targetJID, err := types.ParseJID(to)
+	targetJID, err := buildRecipientJID(to)
 	if err != nil {
-		if !strings.Contains(to, "@") {
-			targetJID, err = types.ParseJID(to + "@s.whatsapp.net")
-		}
-		if err != nil {
-			return fmt.Errorf("failed to parse recipient JID: %w", err)
-		}
+		return fmt.Errorf("failed to parse recipient JID: %w", err)
 	}
 
 	payload := &waE2E.Message{
@@ -383,6 +412,55 @@ func (m *WhatsMeowManager) SendMessage(ctx context.Context, phoneSender string, 
 	_, err = cli.SendMessage(ctx, targetJID, payload)
 	if err != nil {
 		return fmt.Errorf("failed to send message via whatsmeow: %w", err)
+	}
+
+	return nil
+}
+
+func (m *WhatsMeowManager) SendDocument(ctx context.Context, phoneSender string, to string, caption string, fileBytes []byte, filename string) error {
+	cli, err := m.EnsureClient(ctx, phoneSender)
+	if err != nil {
+		return fmt.Errorf("failed to initialise client for sender: %w", err)
+	}
+
+	if !cli.IsLoggedIn() {
+		return errors.New("candidate whatsapp client is not authenticated")
+	}
+
+	for i := 0; i < 20; i++ {
+		if cli.IsConnected() {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	targetJID, err := buildRecipientJID(to)
+	if err != nil {
+		return fmt.Errorf("failed to parse recipient JID: %w", err)
+	}
+
+	uploaded, err := cli.Upload(ctx, fileBytes, whatsmeow.MediaDocument)
+	if err != nil {
+		return fmt.Errorf("failed to upload document: %w", err)
+	}
+
+	payload := &waE2E.Message{
+		DocumentMessage: &waE2E.DocumentMessage{
+			URL:           proto.String(uploaded.URL),
+			DirectPath:    proto.String(uploaded.DirectPath),
+			MediaKey:      uploaded.MediaKey,
+			FileEncSHA256: uploaded.FileEncSHA256,
+			FileSHA256:    uploaded.FileSHA256,
+			FileLength:    proto.Uint64(uploaded.FileLength),
+			Mimetype:      proto.String("application/pdf"),
+			FileName:      proto.String(filename),
+			Caption:       proto.String(caption),
+		},
+	}
+
+	_, err = cli.SendMessage(ctx, targetJID, payload)
+	if err != nil {
+		return fmt.Errorf("failed to send document via whatsmeow: %w", err)
 	}
 
 	return nil
