@@ -194,7 +194,7 @@ document.getElementById('credsDeleteForm').addEventListener('submit', async (e) 
 });
 
 // ---------- WhatsApp ----------
-document.getElementById('wappListBtn').addEventListener('click', async () => {
+async function loadWappConnections() {
   const el = document.getElementById('wappListResult');
   await handle(el, async () => {
     const data = await api('/api/v1/whatsapp/connections');
@@ -202,10 +202,25 @@ document.getElementById('wappListBtn').addEventListener('click', async () => {
       renderMsg(el, 'Nenhuma conexão ativa', 'info');
       return;
     }
-    const rows = data.map((c) => `<tr><td>${escapeHtml(c.phone)}</td><td>${escapeHtml(c.status)}</td><td>${escapeHtml(c.jid || '-')}</td></tr>`).join('');
-    el.innerHTML = `<table><thead><tr><th>Telefone</th><th>Status</th><th>JID</th></tr></thead><tbody>${rows}</tbody></table>`;
+    const rows = data.map((c) => `<tr>
+      <td>${escapeHtml(c.phone)}</td>
+      <td>${escapeHtml(c.status)}</td>
+      <td>${escapeHtml(c.jid || '-')}</td>
+      <td><button class="danger wapp-disconnect-btn" data-phone="${escapeHtml(c.phone)}">Desconectar</button></td>
+    </tr>`).join('');
+    el.innerHTML = `<table><thead><tr><th>Telefone</th><th>Status</th><th>JID</th><th>Ações</th></tr></thead><tbody>${rows}</tbody></table>`;
+    el.querySelectorAll('.wapp-disconnect-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        await handle(el, async () => {
+          await api(`/api/v1/whatsapp/disconnect?phone=${encodeURIComponent(btn.dataset.phone)}`, { method: 'POST' });
+          await loadWappConnections();
+        });
+      });
+    });
   });
-});
+}
+
+document.getElementById('wappListBtn').addEventListener('click', loadWappConnections);
 
 document.getElementById('wappQrForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -239,16 +254,6 @@ document.getElementById('wappStatusForm').addEventListener('submit', async (e) =
   });
 });
 
-document.getElementById('wappDisconnectForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const el = document.getElementById('wappDisconnectResult');
-  await handle(el, async () => {
-    const phone = document.getElementById('wappDisconnectPhone').value;
-    const data = await api(`/api/v1/whatsapp/disconnect?phone=${encodeURIComponent(phone)}`, { method: 'POST' });
-    renderMsg(el, data.message || 'Desconectado', 'success');
-  });
-});
-
 // ---------- Grupos ----------
 function groupsPhone() {
   const phone = document.getElementById('groupsPhone').value.trim();
@@ -276,12 +281,12 @@ function renderGroups(el, groups, watchedJids) {
 }
 
 async function saveWatchedGroups(el) {
+  const selected = [...el.querySelectorAll('input[type=checkbox]:checked')].map((cb) => ({
+    jid: cb.dataset.jid,
+    name: cb.dataset.name,
+  }));
   await handle(el, async () => {
     const phone = groupsPhone();
-    const selected = [...el.querySelectorAll('input[type=checkbox]:checked')].map((cb) => ({
-      jid: cb.dataset.jid,
-      name: cb.dataset.name,
-    }));
     await api(`/api/v1/whatsapp/groups/watched?phone=${encodeURIComponent(phone)}`, {
       method: 'PUT',
       body: JSON.stringify({ groups: selected }),
