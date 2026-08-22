@@ -27,7 +27,7 @@ async function api(path, options = {}) {
 
 async function checkHealth() {
   try {
-    await fetch(apiBase() + '/api/v1/whatsapp/groups/schedule');
+    await fetch(apiBase() + '/api/v1/whatsapp/groups/status');
     apiBaseStatus.className = 'dot online';
   } catch {
     apiBaseStatus.className = 'dot offline';
@@ -244,16 +244,6 @@ document.getElementById('wappQrForm').addEventListener('submit', async (e) => {
   });
 });
 
-document.getElementById('wappStatusForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const el = document.getElementById('wappStatusResult');
-  await handle(el, async () => {
-    const phone = document.getElementById('wappStatusPhone').value;
-    const data = await api(`/api/v1/whatsapp/status?phone=${encodeURIComponent(phone)}`);
-    renderJson(el, data);
-  });
-});
-
 // ---------- Grupos ----------
 function groupsPhone() {
   const phone = document.getElementById('groupsPhone').value.trim();
@@ -319,30 +309,6 @@ document.getElementById('groupsWatchedBtn').addEventListener('click', async () =
     }
     const rows = watched.map((w) => `<tr><td>${escapeHtml(w.group_name)}</td><td>${escapeHtml(w.group_jid)}</td></tr>`).join('');
     el.innerHTML = `<table><thead><tr><th>Nome</th><th>JID</th></tr></thead><tbody>${rows}</tbody></table>`;
-  });
-});
-
-document.getElementById('scheduleGetBtn').addEventListener('click', async () => {
-  const el = document.getElementById('scheduleResult');
-  await handle(el, async () => {
-    const data = await api('/api/v1/whatsapp/groups/schedule');
-    document.getElementById('scheduleHour').value = data.hour;
-    document.getElementById('scheduleMinute').value = data.minute;
-    renderJson(el, data);
-  });
-});
-
-document.getElementById('scheduleForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const el = document.getElementById('scheduleResult');
-  await handle(el, async () => {
-    const hour = Number(document.getElementById('scheduleHour').value);
-    const minute = Number(document.getElementById('scheduleMinute').value);
-    const data = await api('/api/v1/whatsapp/groups/schedule', {
-      method: 'PUT',
-      body: JSON.stringify({ hour, minute }),
-    });
-    renderMsg(el, data.message || 'Agendamento salvo', 'success');
   });
 });
 
