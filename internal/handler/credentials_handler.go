@@ -23,13 +23,15 @@ func NewCredentialsHandler(credsRepo domain.CredentialsRepository, waManager *wh
 
 type credentialsRegisterRequest struct {
 	Email        string `json:"email"`
-	Provider     string `json:"provider"` // "google" ou "microsoft"
+	Provider     string `json:"provider"`
 	RefreshToken string `json:"refresh_token"`
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
 }
 
-// RegisterCredentials gerencia POST /api/v1/credentials
+// RegisterCredentials decodifica e valida as credenciais OAuth2 do corpo da
+// requisição e as persiste via h.credsRepo. Responde 200 com status "success" ou
+// 400/500 com a mensagem de erro.
 func (h *CredentialsHandler) RegisterCredentials(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -68,7 +70,9 @@ func (h *CredentialsHandler) RegisterCredentials(w http.ResponseWriter, r *http.
 	})
 }
 
-// DeleteCredentials gerencia DELETE /api/v1/credentials/{email}
+// DeleteCredentials remove as credenciais de e-mail do candidato identificado
+// pelo parâmetro de rota {email}. Responde 200 com status "success" ou 400/500
+// com a mensagem de erro.
 func (h *CredentialsHandler) DeleteCredentials(w http.ResponseWriter, r *http.Request) {
 	email := r.PathValue("email")
 	if email == "" {
@@ -88,7 +92,9 @@ func (h *CredentialsHandler) DeleteCredentials(w http.ResponseWriter, r *http.Re
 	})
 }
 
-// GetWhatsAppQR gerencia GET /api/v1/whatsapp/qr?phone=...
+// GetWhatsAppQR gera (ou recupera) o QR code de pareamento para o número em
+// ?phone=. Responde com a imagem PNG do QR, ou 200/success se já autenticado, ou
+// 400/500 com a mensagem de erro.
 func (h *CredentialsHandler) GetWhatsAppQR(w http.ResponseWriter, r *http.Request) {
 	phone := r.URL.Query().Get("phone")
 	if phone == "" {
@@ -115,7 +121,8 @@ func (h *CredentialsHandler) GetWhatsAppQR(w http.ResponseWriter, r *http.Reques
 	_, _ = w.Write(qrBytes)
 }
 
-// GetWhatsAppStatus gerencia GET /api/v1/whatsapp/status?phone=...
+// GetWhatsAppStatus consulta o status de conexão do número em ?phone=. Responde
+// 200 com o domain.WhatsAppStatus, ou 400/500 com a mensagem de erro.
 func (h *CredentialsHandler) GetWhatsAppStatus(w http.ResponseWriter, r *http.Request) {
 	phone := r.URL.Query().Get("phone")
 	if phone == "" {
@@ -132,7 +139,9 @@ func (h *CredentialsHandler) GetWhatsAppStatus(w http.ResponseWriter, r *http.Re
 	respondWithJSON(w, http.StatusOK, status)
 }
 
-// ListWhatsAppConnections gerencia GET /api/v1/whatsapp/connections
+// ListWhatsAppConnections lista todo número que já completou pareamento com o
+// WhatsApp. Responde 200 com a lista de domain.WhatsAppStatus, ou 500 com a
+// mensagem de erro.
 func (h *CredentialsHandler) ListWhatsAppConnections(w http.ResponseWriter, r *http.Request) {
 	statuses, err := h.waManager.ListConnected(r.Context())
 	if err != nil {
@@ -143,7 +152,8 @@ func (h *CredentialsHandler) ListWhatsAppConnections(w http.ResponseWriter, r *h
 	respondWithJSON(w, http.StatusOK, statuses)
 }
 
-// DisconnectWhatsApp gerencia POST /api/v1/whatsapp/disconnect?phone=...
+// DisconnectWhatsApp desloga e apaga a sessão do WhatsApp do número em ?phone=.
+// Responde 200 com status "success", ou 400/500 com a mensagem de erro.
 func (h *CredentialsHandler) DisconnectWhatsApp(w http.ResponseWriter, r *http.Request) {
 	phone := r.URL.Query().Get("phone")
 	if phone == "" {

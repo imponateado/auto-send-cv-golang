@@ -20,7 +20,8 @@ type ollamaClient struct {
 	httpClient *http.Client
 }
 
-// NewOllamaClient creates a new Ollama service adapter for generating embeddings.
+// NewOllamaClient returns a domain.GeminiService backed by a *ollamaClient for
+// generating embeddings via a local Ollama instance.
 func NewOllamaClient(apiURL, model string) domain.GeminiService {
 	if apiURL == "" {
 		apiURL = "http://localhost:11434"
@@ -32,7 +33,7 @@ func NewOllamaClient(apiURL, model string) domain.GeminiService {
 		apiURL: apiURL,
 		model:  model,
 		httpClient: &http.Client{
-			Timeout: 5 * time.Minute, // Vectorizing large batches locally might take some time
+			Timeout: 5 * time.Minute,
 		},
 	}
 }

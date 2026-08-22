@@ -12,17 +12,17 @@ type ProcessorHandler struct {
 	orchestrator domain.Orchestrator
 }
 
-// NewProcessorHandler creates a new handler instance.
+// NewProcessorHandler returns a *ProcessorHandler backed by orchestrator.
 func NewProcessorHandler(orchestrator domain.Orchestrator) *ProcessorHandler {
 	return &ProcessorHandler{
 		orchestrator: orchestrator,
 	}
 }
 
-
-// Clear handles POST /api/v1/vacancies/clear
+// Clear apaga todas as vagas do banco vetorial local via h.orchestrator. Responde
+// 200 com status "success", ou 500 com a mensagem de erro.
 // @Summary Limpa o banco de dados vetorial de vagas
-// @Description Remove todas as vagas e coleções existentes no banco de dados local do chromem-go.
+// @Description Apaga todas as vagas do banco vetorial local (chromem-go) e responde com o status da operação.
 // @Tags Vagas
 // @Produce json
 // @Success 200 {object} map[string]string "Banco vetorial de vagas limpo com sucesso"
@@ -46,9 +46,12 @@ type populateRequest struct {
 	Delimiter string `json:"delimiter"`
 }
 
-// Populate handles POST /api/v1/vacancies
+// Populate fatia o texto bruto do corpo pelo delimitador informado e dispara em
+// background a geração de embeddings e a gravação no banco vetorial local via
+// h.orchestrator. Responde 202 com o task_id gerado, ou 400/500 com a mensagem
+// de erro.
 // @Summary Popula o banco vetorial de vagas (Assíncrono)
-// @Description Recebe uma lista de vagas em texto bruto e um delimitador. Inicia a divisão do texto, gera os embeddings vetoriais via Ollama em background e as salva no banco vetorial local (chromem-go). Retorna imediatamente com o task_id.
+// @Description Recebe uma lista de vagas em texto bruto e um delimitador, dispara em background a geração de embeddings e a gravação no banco vetorial local (chromem-go) e responde imediatamente com o task_id.
 // @Tags Vagas
 // @Accept json
 // @Produce json
@@ -86,9 +89,11 @@ func (h *ProcessorHandler) Populate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetTaskStatus handles GET /api/v1/tasks/{id}
+// GetTaskStatus busca o TaskStatus da tarefa identificada pelo parâmetro de rota
+// {id} via h.orchestrator. Responde 200 com o domain.TaskStatus, ou 400/404 com
+// a mensagem de erro.
 // @Summary Consulta o status de uma tarefa em background
-// @Description Retorna o estado atual de processamento de uma tarefa assíncrona (como a geração de embeddings de vagas).
+// @Description Busca e retorna o estado atual de processamento de uma tarefa assíncrona (como a geração de embeddings de vagas) pelo seu ID.
 // @Tags Tarefas
 // @Produce json
 // @Param id path string true "ID da tarefa"
@@ -111,9 +116,10 @@ func (h *ProcessorHandler) GetTaskStatus(w http.ResponseWriter, r *http.Request)
 	respondWithJSON(w, http.StatusOK, task)
 }
 
-// ListTasks handles GET /api/v1/tasks
+// ListTasks lista todas as tarefas assíncronas conhecidas via h.orchestrator.
+// Responde 200 com a lista de domain.TaskStatus, ou 500 com a mensagem de erro.
 // @Summary Lista todas as tarefas em background
-// @Description Retorna o estado de todas as tarefas assíncronas conhecidas (processando, concluídas ou falhas).
+// @Description Busca e retorna o estado de todas as tarefas assíncronas conhecidas (processando, concluídas ou falhas).
 // @Tags Tarefas
 // @Produce json
 // @Success 200 {array} domain.TaskStatus "Lista de tarefas"
@@ -134,9 +140,11 @@ type matchRequest struct {
 	CandidatePhone string `json:"candidate_phone,omitempty"`
 }
 
-// Match handles POST /api/v1/match
+// Match decodifica o currículo em base64 do corpo, extrai seu texto, busca vagas
+// compatíveis e dispara as candidaturas via h.orchestrator. Responde 200 com o
+// domain.ProcessResult, ou 400/500 com a mensagem de erro.
 // @Summary Executa match de currículo contra banco de vagas
-// @Description Recebe apenas o currículo do candidato em base64 e identifica o candidato para disparos dinâmicos.
+// @Description Decodifica o currículo em base64, extrai seu texto, busca vagas compatíveis via LLM e dispara as candidaturas (e-mail ou WhatsApp) automaticamente.
 // @Tags Processador
 // @Accept json
 // @Produce json
@@ -157,7 +165,6 @@ func (h *ProcessorHandler) Match(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Clean base64 prefix if present
 	base64Data := req.FileBase64
 	if idx := strings.Index(base64Data, ","); idx != -1 {
 		base64Data = base64Data[idx+1:]

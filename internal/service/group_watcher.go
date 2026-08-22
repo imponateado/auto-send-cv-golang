@@ -11,7 +11,6 @@ import (
 	"api/internal/infra/whatsapp"
 )
 
-// FlushStatus resume a última rodada de flush do buffer de mensagens.
 type FlushStatus struct {
 	LastRun      *time.Time `json:"last_run,omitempty"`
 	LastCount    int        `json:"last_count"`
@@ -19,9 +18,6 @@ type FlushStatus struct {
 	PendingCount int        `json:"pending_count"`
 }
 
-// GroupWatcher liga o listener de grupos do WhatsApp ao pipeline de vagas:
-// mensagens de grupos observados são bufferizadas e processadas em lote,
-// num horário diário configurável ou sob demanda.
 type GroupWatcher struct {
 	repo         domain.GroupWatchRepository
 	waManager    *whatsapp.WhatsMeowManager
@@ -54,8 +50,9 @@ func (s *GroupWatcher) GetWatchedGroups(ctx context.Context, phone string) ([]do
 	return s.repo.ListWatchedGroups(ctx, phone)
 }
 
-// SetWatchedGroups persiste o novo conjunto de grupos observados para o
-// phone e reinstala o listener ao vivo com o conjunto atualizado.
+// SetWatchedGroups persiste o conjunto de grupos observados para phone e reinstala
+// o listener ao vivo com o conjunto atualizado. Retorna erro se a persistência ou
+// a reinstalação do listener falhar.
 func (s *GroupWatcher) SetWatchedGroups(ctx context.Context, phone string, groups []domain.GroupInfo) error {
 	if err := s.repo.SetWatchedGroups(ctx, phone, groups); err != nil {
 		return err
@@ -69,10 +66,8 @@ func (s *GroupWatcher) SetWatchedGroups(ctx context.Context, phone string, group
 	return s.waManager.WatchGroups(ctx, phone, jids, s.onMessage)
 }
 
-// onMessage é o callback injetado no WhatsMeowManager, mantendo o pacote
-// whatsapp livre de qualquer conhecimento sobre o buffer de persistência.
-// Dispara a partir da goroutine de eventos do whatsmeow, fora de uma
-// requisição HTTP, por isso usa context.Background().
+// onMessage grava msg no buffer de persistência. Não retorna nada ao chamador;
+// erros de persistência só são logados.
 func (s *GroupWatcher) onMessage(_ string, msg domain.BufferedMessage) {
 	if err := s.repo.BufferMessage(context.Background(), msg); err != nil {
 		log.Printf("[GroupWatcher] failed to buffer message: %v", err)
@@ -83,8 +78,8 @@ func (s *GroupWatcher) GetSchedule(ctx context.Context) (domain.FlushSchedule, e
 	return s.repo.GetSchedule(ctx)
 }
 
-// SetSchedule persiste o novo horário e acorda o scheduler para recalcular
-// a próxima execução sem precisar reiniciar o servidor.
+// SetSchedule persiste o novo horário e acorda o scheduler para recalcular a
+// próxima execução. Retorna erro apenas se a persistência falhar.
 func (s *GroupWatcher) SetSchedule(ctx context.Context, sched domain.FlushSchedule) error {
 	if err := s.repo.SetSchedule(ctx, sched); err != nil {
 		return err
@@ -96,8 +91,9 @@ func (s *GroupWatcher) SetSchedule(ctx context.Context, sched domain.FlushSchedu
 	return nil
 }
 
-// FlushNow drena todas as mensagens pendentes do buffer através do
-// orchestrator, num único lote de embeddings.
+// FlushNow drena as mensagens pendentes do buffer através do orchestrator, num
+// único lote de embeddings. Retorna a quantidade de mensagens processadas e um
+// erro se a leitura, o processamento ou a marcação como processada falhar.
 func (s *GroupWatcher) FlushNow(ctx context.Context) (int, error) {
 	s.flushMu.Lock()
 	defer s.flushMu.Unlock()
@@ -149,9 +145,9 @@ func (s *GroupWatcher) recordRun(count int, err error) {
 	}
 }
 
-// Status é uma simplificação deliberada: last_run/last_count/last_error
-// vivem só em memória e resetam num restart do servidor. Upgrade path:
-// persistir numa coluna da tabela group_flush_schedule se isso importar.
+// Status monta o FlushStatus atual (contagem pendente mais o resultado da
+// última rodada de flush em memória). Retorna erro apenas se a contagem de
+// pendências falhar.
 func (s *GroupWatcher) Status(ctx context.Context) (FlushStatus, error) {
 	pending, err := s.repo.CountPending(ctx)
 	if err != nil {
@@ -169,8 +165,9 @@ func (s *GroupWatcher) Status(ctx context.Context) (FlushStatus, error) {
 	return status, nil
 }
 
-// Bootstrap reinstala os listeners ao vivo para todo phone com pelo menos
-// um grupo observado — necessário depois de um restart do servidor.
+// Bootstrap reinstala os listeners ao vivo para todo phone com pelo menos um
+// grupo observado. Retorna erro apenas se listar os phones observados falhar;
+// falhas por phone individual só são logadas.
 func (s *GroupWatcher) Bootstrap(ctx context.Context) error {
 	phones, err := s.repo.ListAllWatchedPhones(ctx)
 	if err != nil {
@@ -205,9 +202,9 @@ func nextOccurrence(now time.Time, hour, minute int) time.Duration {
 	return next.Sub(now)
 }
 
-// RunScheduler bloqueia, acordando no horário configurado (HH:MM) a cada
-// dia — ou imediatamente ao recalcular via SetSchedule — para disparar
-// FlushNow. Encerra quando ctx é cancelado (shutdown do servidor).
+// RunScheduler bloqueia, disparando FlushNow no horário configurado (HH:MM) a
+// cada dia ou imediatamente após um SetSchedule. Não retorna nada; encerra
+// quando ctx é cancelado.
 func (s *GroupWatcher) RunScheduler(ctx context.Context) {
 	for {
 		sched, err := s.repo.GetSchedule(context.Background())

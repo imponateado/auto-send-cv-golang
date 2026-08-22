@@ -22,7 +22,8 @@ type deepseekClient struct {
 	httpClient *http.Client
 }
 
-// NewDeepSeekClient creates a new DeepSeek service adapter using the native HTTP client.
+// NewDeepSeekClient returns a domain.GeminiService backed by a *deepseekClient
+// using the native HTTP client.
 func NewDeepSeekClient(apiKey, model string) domain.GeminiService {
 	if model == "" {
 		model = "deepseek-v4-flash"
@@ -32,12 +33,11 @@ func NewDeepSeekClient(apiKey, model string) domain.GeminiService {
 		model:  model,
 		apiURL: "https://api.deepseek.com",
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second, // DeepSeek calls can take longer, especially thinking ones
+			Timeout: 60 * time.Second,
 		},
 	}
 }
 
-// DeepSeek request structures
 type deepseekRequest struct {
 	Model          string          `json:"model"`
 	Messages       []chatMessage   `json:"messages"`
@@ -53,7 +53,6 @@ type responseFormat struct {
 	Type string `json:"type"`
 }
 
-// DeepSeek response structures
 type deepseekResponse struct {
 	Choices []choice `json:"choices"`
 }
@@ -76,9 +75,10 @@ func (c *deepseekClient) MatchResume(ctx context.Context, fileB64 string, fileMi
 	builder.WriteString("Abaixo está o texto extraído do currículo de um candidato e uma lista de vagas de emprego.\n")
 	builder.WriteString("Analise o currículo e compare-o com cada uma das vagas.\n")
 	builder.WriteString("Retorne no formato JSON estruturado quais vagas dão match com o candidato.\n")
-	builder.WriteString("Para cada match, identifique: o index da vaga na lista, o motivo, o canal de contato ('email' ou 'whatsapp') e o email ou telefone de destino indicado no texto da vaga.\n\n")
+	builder.WriteString("Para cada match, identifique: o index da vaga na lista, o motivo, o canal de contato ('email' ou 'whatsapp') e o email ou telefone de destino indicado no texto da vaga.\n")
+	builder.WriteString("Se o canal de contato for 'whatsapp', o contact_target deve conter APENAS dígitos, incluindo o código do país do Brasil (55) antes do DDD, sem parênteses, espaços ou hífens (ex: \"(61) 99205-5310\" vira \"5561992055310\").\n\n")
 	builder.WriteString("A resposta DEVE ser um objeto JSON válido seguindo estritamente este formato:\n")
-	builder.WriteString("{\n  \"matches\": [\n    {\n      \"index\": 0,\n      \"reason\": \"motivo detalhado em português\",\n      \"contact_type\": \"email\" ou \"whatsapp\",\n      \"contact_target\": \"email ou telefone\"\n    }\n  ]\n}\n\n")
+	builder.WriteString("{\n  \"matches\": [\n    {\n      \"index\": 0,\n      \"reason\": \"motivo detalhado em português\",\n      \"contact_type\": \"email\" ou \"whatsapp\",\n      \"contact_target\": \"email ou telefone (somente dígitos com código do país se whatsapp)\"\n    }\n  ]\n}\n\n")
 	builder.WriteString("Currículo do Candidato:\n")
 	builder.WriteString(resumeText)
 	builder.WriteString("\n\nLista de Vagas:\n")
@@ -181,4 +181,3 @@ func (c *deepseekClient) GetEmbeddings(ctx context.Context, texts []string) ([][
 func (c *deepseekClient) ExtractText(ctx context.Context, fileB64 string, fileMime string) (string, error) {
 	return pdf.ExtractTextFromBase64(fileB64, fileMime)
 }
-

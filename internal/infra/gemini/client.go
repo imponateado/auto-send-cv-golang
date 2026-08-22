@@ -22,7 +22,8 @@ type geminiClient struct {
 	httpClient *http.Client
 }
 
-// NewGeminiClient creates a new Gemini service adapter using the native HTTP client.
+// NewGeminiClient returns a domain.GeminiService backed by a *geminiClient using
+// the native HTTP client.
 func NewGeminiClient(apiKey, model string) domain.GeminiService {
 	if model == "" {
 		model = "gemini-2.5-flash"
@@ -32,12 +33,11 @@ func NewGeminiClient(apiKey, model string) domain.GeminiService {
 		model:  model,
 		apiURL: "https://generativelanguage.googleapis.com/v1beta",
 		httpClient: &http.Client{
-			Timeout: 45 * time.Second, // GenAI API matching can take a few seconds
+			Timeout: 45 * time.Second,
 		},
 	}
 }
 
-// Gemini request structures
 type geminiRequest struct {
 	Contents         []content        `json:"contents"`
 	GenerationConfig generationConfig `json:"generationConfig"`
@@ -54,7 +54,7 @@ type part struct {
 
 type inlineData struct {
 	MimeType string `json:"mimeType"`
-	Data     string `json:"data"` // base64 string
+	Data     string `json:"data"`
 }
 
 type generationConfig struct {
@@ -78,7 +78,6 @@ type schemaProperty struct {
 	Enum        []string        `json:"enum,omitempty"`
 }
 
-// Gemini response structures
 type geminiResponse struct {
 	Candidates []candidate `json:"candidates"`
 }
@@ -92,22 +91,21 @@ func (c *geminiClient) MatchResume(ctx context.Context, fileB64 string, fileMime
 		return nil, fmt.Errorf("gemini client is misconfigured: api key is required")
 	}
 
-	// Clean base64 string
 	if idx := strings.Index(fileB64, ","); idx != -1 {
 		fileB64 = fileB64[idx+1:]
 	}
 	fileB64 = strings.Join(strings.Fields(fileB64), "")
 
 	if fileMime == "" {
-		fileMime = "application/pdf" // default to PDF
+		fileMime = "application/pdf"
 	}
 
-	// Build the vacancies list for the prompt
 	var builder strings.Builder
 	builder.WriteString("Abaixo está o currículo de um candidato (em anexo) e uma lista de vagas de emprego.\n")
 	builder.WriteString("Analise o currículo e compare-o com cada uma das vagas.\n")
 	builder.WriteString("Retorne no formato JSON estruturado quais vagas dão match com o candidato.\n")
-	builder.WriteString("Para cada match, identifique: o index da vaga na lista, o motivo, o canal de contato ('email' ou 'whatsapp') e o email ou telefone de destino indicado no texto da vaga.\n\n")
+	builder.WriteString("Para cada match, identifique: o index da vaga na lista, o motivo, o canal de contato ('email' ou 'whatsapp') e o email ou telefone de destino indicado no texto da vaga.\n")
+	builder.WriteString("Se o canal de contato for 'whatsapp', o contact_target deve conter APENAS dígitos, incluindo o código do país do Brasil (55) antes do DDD, sem parênteses, espaços ou hífens (ex: \"(61) 99205-5310\" vira \"5561992055310\").\n\n")
 	builder.WriteString("Lista de Vagas:\n")
 	for i, v := range vacancies {
 		builder.WriteString(fmt.Sprintf("%d: %s\n", i, v))
@@ -132,13 +130,13 @@ func (c *geminiClient) MatchResume(ctx context.Context, fileB64 string, fileMime
 		GenerationConfig: generationConfig{
 			ResponseMimeType: "application/json",
 			ResponseSchema: responseSchema{
-				Type: "OBJECT",
+				Type:     "OBJECT",
 				Required: []string{"matches"},
 				Properties: map[string]schemaProperty{
 					"matches": {
 						Type: "ARRAY",
 						Items: &responseSchema{
-							Type: "OBJECT",
+							Type:     "OBJECT",
 							Required: []string{"index", "reason", "contact_type", "contact_target"},
 							Properties: map[string]schemaProperty{
 								"index": {
@@ -156,7 +154,7 @@ func (c *geminiClient) MatchResume(ctx context.Context, fileB64 string, fileMime
 								},
 								"contact_target": {
 									Type:        "STRING",
-									Description: "O e-mail ou o número de telefone da empresa informado na vaga",
+									Description: "O e-mail ou o número de telefone da empresa informado na vaga. Se for telefone (contact_type 'whatsapp'), retornar somente dígitos com o código do país 55 antes do DDD (ex: 5561992055310)",
 								},
 							},
 						},
@@ -210,7 +208,6 @@ func (c *geminiClient) MatchResume(ctx context.Context, fileB64 string, fileMime
 	responseText := geminiRes.Candidates[0].Content.Parts[0].Text
 	log.Printf("[GeminiClient] Raw response content from model:\n%s", responseText)
 
-	// Parse structured JSON returned by Gemini
 	var matchResult domain.MatchResult
 	if err := json.Unmarshal([]byte(responseText), &matchResult); err != nil {
 		log.Printf("[GeminiClient] Error unmarshalling structured JSON: %v", err)
@@ -225,8 +222,6 @@ func (c *geminiClient) GetEmbeddings(ctx context.Context, texts []string) ([][]f
 	return nil, fmt.Errorf("gemini embedding is deprecated in this project. Please configure Ollama as the embedding provider")
 }
 
-
 func (c *geminiClient) ExtractText(ctx context.Context, fileB64 string, fileMime string) (string, error) {
 	return pdf.ExtractTextFromBase64(fileB64, fileMime)
 }
-

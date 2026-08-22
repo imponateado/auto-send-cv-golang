@@ -10,7 +10,6 @@ import (
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
-// responseWriter wraps http.ResponseWriter to capture the status code of responses.
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -25,16 +24,16 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// RegisterRoutes sets up the endpoints and decorates them with logging and recovery middleware.
+// RegisterRoutes registra as rotas de procHandler, credsHandler e groupHandler no
+// mux, envolvidas em logging/recovery/CORS. Retorna o http.Handler final pronto
+// para ser servido.
 func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler, credsHandler *CredentialsHandler, groupHandler *GroupWatchHandler) http.Handler {
-	// Register endpoints using Go 1.22+ ServeMux method-matching syntax
 	mux.HandleFunc("POST /api/v1/vacancies/clear", procHandler.Clear)
 	mux.HandleFunc("POST /api/v1/vacancies", procHandler.Populate)
 	mux.HandleFunc("POST /api/v1/match", procHandler.Match)
 	mux.HandleFunc("GET /api/v1/tasks", procHandler.ListTasks)
 	mux.HandleFunc("GET /api/v1/tasks/{id}", procHandler.GetTaskStatus)
 
-	// Credentials & WhatsApp routes
 	mux.HandleFunc("POST /api/v1/credentials", credsHandler.RegisterCredentials)
 	mux.HandleFunc("DELETE /api/v1/credentials/{email}", credsHandler.DeleteCredentials)
 	mux.HandleFunc("GET /api/v1/whatsapp/connections", credsHandler.ListWhatsAppConnections)
@@ -42,7 +41,6 @@ func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler, credsHand
 	mux.HandleFunc("GET /api/v1/whatsapp/status", credsHandler.GetWhatsAppStatus)
 	mux.HandleFunc("POST /api/v1/whatsapp/disconnect", credsHandler.DisconnectWhatsApp)
 
-	// Group-watch routes (fonte de vagas via grupos do WhatsApp)
 	mux.HandleFunc("GET /api/v1/whatsapp/groups", groupHandler.ListGroups)
 	mux.HandleFunc("GET /api/v1/whatsapp/groups/watched", groupHandler.GetWatchedGroups)
 	mux.HandleFunc("PUT /api/v1/whatsapp/groups/watched", groupHandler.SetWatchedGroups)
@@ -51,7 +49,6 @@ func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler, credsHand
 	mux.HandleFunc("POST /api/v1/whatsapp/groups/flush", groupHandler.FlushNow)
 	mux.HandleFunc("GET /api/v1/whatsapp/groups/status", groupHandler.Status)
 
-	// Register Swagger UI handler
 	mux.Handle("GET /swagger/", httpSwagger.WrapHandler)
 
 	var handler http.Handler = mux
@@ -62,7 +59,8 @@ func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler, credsHand
 	return handler
 }
 
-// corsMiddleware allows the (separately hosted) Flutter frontend to call this API cross-origin.
+// corsMiddleware wraps next, adding permissive CORS headers and short-circuiting
+// OPTIONS preflight requests with a 204. Returns the wrapping http.Handler.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")

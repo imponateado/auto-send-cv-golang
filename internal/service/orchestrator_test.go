@@ -86,10 +86,15 @@ func (m *mockEmail) SendEmail(ctx context.Context, to string, subject string, bo
 
 type mockWhatsApp struct {
 	sendFn func(ctx context.Context, phoneSender string, to string, message string) error
+	docFn  func(ctx context.Context, phoneSender string, to string, caption string, fileBytes []byte, filename string) error
 }
 
 func (m *mockWhatsApp) SendMessage(ctx context.Context, phoneSender string, to string, message string) error {
 	return m.sendFn(ctx, phoneSender, to, message)
+}
+
+func (m *mockWhatsApp) SendDocument(ctx context.Context, phoneSender string, to string, caption string, fileBytes []byte, filename string) error {
+	return m.docFn(ctx, phoneSender, to, caption, fileBytes, filename)
 }
 
 type mockCredsRepo struct {
@@ -220,10 +225,13 @@ func TestOrchestrator_Methods(t *testing.T) {
 
 		waCalls := 0
 		mWhatsApp := &mockWhatsApp{
-			sendFn: func(ctx context.Context, phoneSender string, to string, message string) error {
+			docFn: func(ctx context.Context, phoneSender string, to string, caption string, fileBytes []byte, filename string) error {
 				waCalls++
 				if phoneSender != "5511888888888" || to != "5511999999999" {
 					t.Errorf("unexpected whatsapp call parameters: sender=%s, to=%s", phoneSender, to)
+				}
+				if string(fileBytes) != "hello" {
+					t.Errorf("unexpected whatsapp document bytes: %q", fileBytes)
 				}
 				return nil
 			},
@@ -266,7 +274,6 @@ func TestOrchestrator_Methods(t *testing.T) {
 			t.Fatal("expected non-empty task ID")
 		}
 
-		// Wait slightly for the goroutine to run
 		time.Sleep(50 * time.Millisecond)
 
 		status, err := orch.GetTaskStatus(context.Background(), taskID)

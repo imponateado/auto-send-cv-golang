@@ -13,8 +13,9 @@ type groupWatchRepo struct {
 	db *sql.DB
 }
 
-// NewGroupWatchRepo garante que as tabelas de grupos observados, buffer de
-// mensagens e agendamento de flush existam na conexão fornecida.
+// NewGroupWatchRepo cria as tabelas de grupos observados, buffer de mensagens e
+// agendamento de flush em db caso não existam. Retorna um
+// domain.GroupWatchRepository, ou erro se a criação do schema falhar.
 func NewGroupWatchRepo(db *sql.DB) (domain.GroupWatchRepository, error) {
 	query := `
 	CREATE TABLE IF NOT EXISTS watched_groups (

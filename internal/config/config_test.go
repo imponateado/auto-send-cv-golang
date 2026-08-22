@@ -7,7 +7,6 @@ import (
 )
 
 func TestParseEnv(t *testing.T) {
-	// Clean up any test variables we set
 	defer func() {
 		os.Unsetenv("TEST_PORT")
 		os.Unsetenv("TEST_ENV")
@@ -16,7 +15,6 @@ func TestParseEnv(t *testing.T) {
 		os.Unsetenv("TEST_PRESERVED")
 	}()
 
-	// Set a pre-existing env variable to verify precedence
 	os.Setenv("TEST_PRESERVED", "system-value")
 
 	envData := `

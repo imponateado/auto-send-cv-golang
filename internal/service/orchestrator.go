@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"math"
@@ -17,9 +18,9 @@ import (
 )
 
 type orchestrator struct {
-	geminiService    domain.GeminiService // matching service (Gemini or DeepSeek)
-	embeddingService domain.GeminiService // embedding service (Ollama)
-	vectorStore      domain.VectorStore   // banco vetorial (chromem-go)
+	geminiService    domain.GeminiService
+	embeddingService domain.GeminiService
+	vectorStore      domain.VectorStore
 	credsRepo        domain.CredentialsRepository
 	waManager        domain.WhatsAppManager
 	newEmailService  func(creds *domain.EmailCredentials) domain.EmailService
@@ -102,7 +103,6 @@ func writeExecutionLog(filename string, startTime time.Time, processedCount int6
 			builder.WriteString(fmt.Sprintf("- Justificativa da LLM: %s\n", r.match.Reason))
 			builder.WriteString(fmt.Sprintf("- Status de Envio: %s\n", r.status))
 
-			// Localiza o texto da vaga no slice de scores
 			var vacText string
 			for _, s := range scores {
 				if s.Index == r.match.Index {
@@ -136,12 +136,16 @@ func cosineSimilarity(a, b []float32) float32 {
 	return float32(dotProduct / (math.Sqrt(normA) * math.Sqrt(normB)))
 }
 
-// ClearVacancies limpa a tabela local do banco vetorial.
+// ClearVacancies apaga todas as vagas da tabela local do banco vetorial. Retorna
+// erro se a limpeza falhar.
 func (o *orchestrator) ClearVacancies(ctx context.Context) error {
 	return o.vectorStore.Clear(ctx)
 }
 
-// PopulateVacancies processa o texto bruto, fatia pelo delimitador, gera os embeddings das novas vagas e as insere no banco local.
+// PopulateVacancies fatia content pelo delimiter, gera embeddings para as vagas
+// novas e as insere no banco vetorial local. Retorna a quantidade de vagas
+// inseridas e um erro se content/delimiter estiverem vazios ou se a geração de
+// embeddings/inserção falhar.
 func (o *orchestrator) PopulateVacancies(ctx context.Context, content, delimiter string) (int, error) {
 	if content == "" {
 		return 0, fmt.Errorf("content cannot be empty")
@@ -150,7 +154,6 @@ func (o *orchestrator) PopulateVacancies(ctx context.Context, content, delimiter
 		return 0, fmt.Errorf("delimiter cannot be empty")
 	}
 
-	// Fatia as vagas pelo delimitador
 	items := strings.Split(content, delimiter)
 	if len(items) > 0 && items[len(items)-1] == "" {
 		items = items[:len(items)-1]
@@ -168,7 +171,6 @@ func (o *orchestrator) populateItems(ctx context.Context, items []string) (int, 
 		return 0, nil
 	}
 
-	// Filtra vagas que ainda não estão no banco local usando hash SHA256 do conteúdo
 	var newItems []string
 	for _, item := range items {
 		trimmed := strings.TrimSpace(item)
@@ -230,7 +232,11 @@ func (o *orchestrator) populateItems(ctx context.Context, items []string) (int, 
 	return itemsSaved, nil
 }
 
-// MatchResume processa e extrai o currículo, gera o embedding e busca matches refinados via IA.
+// MatchResume extrai o texto do currículo, gera seu embedding, busca vagas
+// similares no banco vetorial local e refina os matches via LLM, disparando a
+// candidatura (e-mail ou WhatsApp) para cada match confirmado. Retorna o
+// *domain.ProcessResult com os matches e um erro se qualquer etapa (extração,
+// embedding, busca de similaridade ou matching via LLM) falhar.
 func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candidateEmail, candidatePhone string) (*domain.ProcessResult, error) {
 	start := time.Now()
 	logFilename := fmt.Sprintf("log_%s.txt", start.Format("2006-01-02_15-04-05"))
@@ -240,7 +246,6 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 		fileMime = "application/pdf"
 	}
 
-	// 1. Extrai texto do currículo em PDF/Documento
 	log.Printf("[Orchestrator] Extraindo texto do currículo (MIME: %s)...", fileMime)
 	resumeText, err := o.geminiService.ExtractText(ctx, fileB64, fileMime)
 	if err != nil {
@@ -255,7 +260,6 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 	}
 	log.Printf("[Orchestrator] Texto do currículo extraído (%d caracteres). Preview:\n%s", len(resumeText), resumePreview)
 
-	// 2. Gera embedding para o currículo
 	log.Println("[Orchestrator] Solicitando embedding para o currículo...")
 	resumeEmbs, err := o.embeddingService.GetEmbeddings(ctx, []string{resumeText})
 	if err != nil || len(resumeEmbs) == 0 {
@@ -266,7 +270,6 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 	resumeEmbedding := resumeEmbs[0]
 	log.Printf("[Orchestrator] Embedding do currículo gerado com sucesso (dimensões: %d).", len(resumeEmbedding))
 
-	// 3. Lê o threshold do ambiente
 	thresholdStr := os.Getenv("EMBEDDING_THRESHOLD")
 	threshold := float32(0.35)
 	if thresholdStr != "" {
@@ -275,7 +278,6 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 		}
 	}
 
-	// 4. Busca vagas similares no banco local usando o threshold
 	matchedVacancies, err := o.vectorStore.SearchSimilarity(ctx, resumeEmbedding, 10, threshold)
 	if err != nil {
 		log.Printf("[Orchestrator] Erro na busca vetorial local: %v", err)
@@ -283,7 +285,6 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 		return nil, fmt.Errorf("failed to search similar vacancies: %w", err)
 	}
 
-	// 5. Se nenhuma vaga passou pelo filtro, retorna antecipadamente
 	if len(matchedVacancies) == 0 {
 		reason := fmt.Sprintf("Nenhuma vaga compatível com o limite de similaridade semântica (threshold: %.2f).", threshold)
 		log.Printf("[Orchestrator] Fim de fluxo precoce: %s", reason)
@@ -295,13 +296,11 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 		}, nil
 	}
 
-	// Extrai os textos limpos para enviar ao validador da LLM
 	filteredTexts := make([]string, len(matchedVacancies))
 	for i, v := range matchedVacancies {
 		filteredTexts[i] = v.Text
 	}
 
-	// 6. Faz o match fino e estruturado usando a LLM (Gemini/DeepSeek)
 	log.Printf("[Orchestrator] Chamando validador da LLM para as %d vagas pré-filtradas...", len(matchedVacancies))
 	matchRes, err := o.geminiService.MatchResume(ctx, fileB64, fileMime, filteredTexts)
 	if err != nil {
@@ -314,7 +313,6 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 		return nil, fmt.Errorf("LLM matching failed: %w", err)
 	}
 
-	// 7. Mapeia os índices da lista filtrada de volta para os índices originais salvos
 	var validMatches []domain.Match
 	for i := range matchRes.Matches {
 		idx := matchRes.Matches[i].Index
@@ -330,13 +328,12 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 	matchRes.Matches = validMatches
 	log.Printf("[Orchestrator] LLM validou %d matches finais.", len(matchRes.Matches))
 
-	// 8. Dispara as candidaturas confirmadas
 	var dispatchResults []dispatchResult
 	var scores []vacancyScore
 	for _, v := range matchedVacancies {
 		scores = append(scores, vacancyScore{
 			Index:  v.Index,
-			Score:  1.0, // score dummy para o log legível
+			Score:  1.0,
 			Passed: true,
 			Text:   v.Text,
 		})
@@ -382,10 +379,17 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 				break
 			}
 
-			log.Printf("[Orchestrator] Enviando WhatsApp via WhatsMeow -> para: %s...", match.ContactTarget)
-			body := fmt.Sprintf("Olá!\n\nEstou me candidatando à sua vaga de emprego.\n\n*Motivo do Match:*\n%s\n\nEnviei meu currículo por e-mail ou no formato correspondente para análise.", match.Reason)
+			fileBytes, err := base64.StdEncoding.DecodeString(fileB64)
+			if err != nil {
+				log.Printf("[Orchestrator] Falha ao decodificar currículo em base64: %v", err)
+				status = fmt.Sprintf("Erro ao decodificar currículo: %v", err)
+				break
+			}
 
-			err := o.waManager.SendMessage(ctx, candidatePhone, match.ContactTarget, body)
+			log.Printf("[Orchestrator] Enviando WhatsApp via WhatsMeow -> para: %s...", match.ContactTarget)
+			caption := fmt.Sprintf("Olá!\n\nEstou me candidatando à sua vaga de emprego.\n\n*Motivo do Match:*\n%s\n\nEm anexo, envio meu currículo para avaliação.", match.Reason)
+
+			err = o.waManager.SendDocument(ctx, candidatePhone, match.ContactTarget, caption, fileBytes, "curriculo.pdf")
 			if err != nil {
 				log.Printf("[Orchestrator] Falha no WhatsApp para %s: %v", match.ContactTarget, err)
 				status = fmt.Sprintf("Erro no envio do WhatsApp: %v", err)
@@ -405,7 +409,6 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 		})
 	}
 
-	// 9. Grava o log detalhado em arquivo
 	err = writeExecutionLog(logFilename, start, int64(len(scores)), len(matchRes.Matches), dispatchResults, scores, "")
 	if err != nil {
 		log.Printf("[Orchestrator] Erro ao gravar arquivo de log %s: %v", logFilename, err)
@@ -418,7 +421,9 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 	}, nil
 }
 
-// PopulateVacanciesAsync gera uma tarefa em background para processar as vagas e retorna o taskID gerado.
+// PopulateVacanciesAsync dispara PopulateVacancies em background e retorna
+// imediatamente o taskID gerado (sempre sem erro; falhas do processamento em si
+// ficam no TaskStatus, consultável via GetTaskStatus).
 func (o *orchestrator) PopulateVacanciesAsync(ctx context.Context, content, delimiter string) (string, error) {
 	taskID := fmt.Sprintf("task_%d", time.Now().UnixNano())
 
@@ -431,8 +436,6 @@ func (o *orchestrator) PopulateVacanciesAsync(ctx context.Context, content, deli
 	o.tasks[taskID] = task
 	o.tasksMu.Unlock()
 
-	// Dispara o processamento em background usando context.Background()
-	// para que a tarefa continue rodando mesmo após a requisição HTTP original ser encerrada.
 	go func() {
 		log.Printf("[Orchestrator] Iniciando processamento em background da tarefa %s...", taskID)
 		count, err := o.PopulateVacancies(context.Background(), content, delimiter)
@@ -455,7 +458,8 @@ func (o *orchestrator) PopulateVacanciesAsync(ctx context.Context, content, deli
 	return taskID, nil
 }
 
-// GetTaskStatus busca o estado de processamento de uma tarefa ativa ou concluída pelo taskID.
+// GetTaskStatus busca o TaskStatus de uma tarefa ativa ou concluída pelo taskID.
+// Retorna uma cópia thread-safe do estado, ou erro se o taskID não existir.
 func (o *orchestrator) GetTaskStatus(ctx context.Context, taskID string) (*domain.TaskStatus, error) {
 	o.tasksMu.RLock()
 	defer o.tasksMu.RUnlock()
@@ -465,7 +469,6 @@ func (o *orchestrator) GetTaskStatus(ctx context.Context, taskID string) (*domai
 		return nil, fmt.Errorf("task %s not found", taskID)
 	}
 
-	// Retorna uma cópia thread-safe dos dados
 	return &domain.TaskStatus{
 		ID:             task.ID,
 		Status:         task.Status,

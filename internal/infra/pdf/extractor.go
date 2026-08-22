@@ -9,10 +9,11 @@ import (
 	"github.com/ledongthuc/pdf"
 )
 
-// ExtractTextFromBase64 decodes a base64 string and extracts its text contents.
-// If the MIME type is PDF, it parses it to extract pages. Otherwise it attempts to return it as a string.
+// ExtractTextFromBase64 decodes base64Str and, if mimeType is a PDF, parses its
+// pages into plain text; for text/* or octet-stream it returns the decoded bytes
+// as-is. Returns the extracted text, or an error if decoding or PDF parsing
+// fails.
 func ExtractTextFromBase64(base64Str string, mimeType string) (string, error) {
-	// Clean base64 string
 	if idx := strings.Index(base64Str, ","); idx != -1 {
 		base64Str = base64Str[idx+1:]
 	}
@@ -23,12 +24,10 @@ func ExtractTextFromBase64(base64Str string, mimeType string) (string, error) {
 		return "", fmt.Errorf("failed to decode base64: %w", err)
 	}
 
-	// For plain text, decode directly
 	if strings.Contains(mimeType, "text/") || mimeType == "application/octet-stream" {
 		return string(decodedBytes), nil
 	}
 
-	// Default to PDF parsing
 	readerAt := bytes.NewReader(decodedBytes)
 	size := int64(len(decodedBytes))
 
@@ -46,7 +45,6 @@ func ExtractTextFromBase64(base64Str string, mimeType string) (string, error) {
 		}
 		text, err := page.GetPlainText(nil)
 		if err != nil {
-			// Some pages might fail or be empty, continue to extract other pages
 			continue
 		}
 		textBuilder.WriteString(text)

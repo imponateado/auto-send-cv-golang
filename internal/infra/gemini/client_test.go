@@ -25,7 +25,6 @@ func TestGeminiClient_MatchResume(t *testing.T) {
 				t.Errorf("expected key query param %s, got: %s", apiKey, key)
 			}
 
-			// Simulated Gemini response body containing structured matches
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{
 				"candidates": [

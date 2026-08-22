@@ -16,7 +16,8 @@ func NewGroupWatchHandler(svc *service.GroupWatcher) *GroupWatchHandler {
 	return &GroupWatchHandler{svc: svc}
 }
 
-// ListGroups gerencia GET /api/v1/whatsapp/groups?phone=...
+// ListGroups lista os grupos do WhatsApp de que o número em ?phone= é membro.
+// Responde 200 com a lista de domain.GroupInfo, ou 400/500 com a mensagem de erro.
 func (h *GroupWatchHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	phone := r.URL.Query().Get("phone")
 	if phone == "" {
@@ -33,7 +34,9 @@ func (h *GroupWatchHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, http.StatusOK, groups)
 }
 
-// GetWatchedGroups gerencia GET /api/v1/whatsapp/groups/watched?phone=...
+// GetWatchedGroups lista os grupos atualmente observados para o número em
+// ?phone=. Responde 200 com a lista de domain.WatchedGroup, ou 400/500 com a
+// mensagem de erro.
 func (h *GroupWatchHandler) GetWatchedGroups(w http.ResponseWriter, r *http.Request) {
 	phone := r.URL.Query().Get("phone")
 	if phone == "" {
@@ -54,7 +57,9 @@ type setWatchedGroupsRequest struct {
 	Groups []domain.GroupInfo `json:"groups"`
 }
 
-// SetWatchedGroups gerencia PUT /api/v1/whatsapp/groups/watched?phone=...
+// SetWatchedGroups substitui o conjunto de grupos observados para o número em
+// ?phone= pelo corpo da requisição. Responde 200 com status "success", ou
+// 400/500 com a mensagem de erro.
 func (h *GroupWatchHandler) SetWatchedGroups(w http.ResponseWriter, r *http.Request) {
 	phone := r.URL.Query().Get("phone")
 	if phone == "" {
@@ -79,7 +84,8 @@ func (h *GroupWatchHandler) SetWatchedGroups(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// GetSchedule gerencia GET /api/v1/whatsapp/groups/schedule
+// GetSchedule consulta o horário diário global de flush do buffer. Responde 200
+// com o domain.FlushSchedule, ou 500 com a mensagem de erro.
 func (h *GroupWatchHandler) GetSchedule(w http.ResponseWriter, r *http.Request) {
 	sched, err := h.svc.GetSchedule(r.Context())
 	if err != nil {
@@ -90,7 +96,8 @@ func (h *GroupWatchHandler) GetSchedule(w http.ResponseWriter, r *http.Request) 
 	respondWithJSON(w, http.StatusOK, sched)
 }
 
-// SetSchedule gerencia PUT /api/v1/whatsapp/groups/schedule
+// SetSchedule valida e atualiza o horário diário global de flush do buffer.
+// Responde 200 com status "success", ou 400/500 com a mensagem de erro.
 func (h *GroupWatchHandler) SetSchedule(w http.ResponseWriter, r *http.Request) {
 	var req domain.FlushSchedule
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -113,7 +120,9 @@ func (h *GroupWatchHandler) SetSchedule(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// FlushNow gerencia POST /api/v1/whatsapp/groups/flush
+// FlushNow dispara imediatamente o processamento do buffer de mensagens
+// pendentes. Responde 200 com a quantidade de itens processados, ou 500 com a
+// mensagem de erro.
 func (h *GroupWatchHandler) FlushNow(w http.ResponseWriter, r *http.Request) {
 	count, err := h.svc.FlushNow(r.Context())
 	if err != nil {
@@ -127,7 +136,9 @@ func (h *GroupWatchHandler) FlushNow(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Status gerencia GET /api/v1/whatsapp/groups/status
+// Status consulta a contagem de mensagens pendentes e o resultado da última
+// rodada de flush. Responde 200 com o service.FlushStatus, ou 500 com a mensagem
+// de erro.
 func (h *GroupWatchHandler) Status(w http.ResponseWriter, r *http.Request) {
 	status, err := h.svc.Status(r.Context())
 	if err != nil {

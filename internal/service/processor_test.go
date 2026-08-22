@@ -58,7 +58,7 @@ func TestTextProcessor_Process(t *testing.T) {
 			name:          "File only (Text File in Base64)",
 			content:       "",
 			delimiter:     "",
-			fileBase64:    "aGVsbG8gd29ybGQ=", // "hello world" in base64
+			fileBase64:    "aGVsbG8gd29ybGQ=",
 			expectedBytes: 0,
 			expectedItems: 0,
 			expectedList:  []string{},
@@ -73,7 +73,7 @@ func TestTextProcessor_Process(t *testing.T) {
 			name:          "File only (PDF-like bytes in Base64)",
 			content:       "",
 			delimiter:     "",
-			fileBase64:    "JVBERi0xLjQK", // "%PDF-1.4\n" in base64
+			fileBase64:    "JVBERi0xLjQK",
 			expectedBytes: 0,
 			expectedItems: 0,
 			expectedList:  []string{},
@@ -88,7 +88,7 @@ func TestTextProcessor_Process(t *testing.T) {
 			name:          "File only with Data URL prefix",
 			content:       "",
 			delimiter:     "",
-			fileBase64:    "data:text/plain;base64,aGVsbG8=", // "hello" in base64
+			fileBase64:    "data:text/plain;base64,aGVsbG8=",
 			expectedBytes: 0,
 			expectedItems: 0,
 			expectedList:  []string{},
@@ -189,7 +189,7 @@ func TestTextProcessor_Process(t *testing.T) {
 
 func TestTextProcessor_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately
+	cancel()
 
 	p := NewTextProcessor()
 	req := &domain.ProcessRequest{

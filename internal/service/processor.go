@@ -14,12 +14,15 @@ import (
 
 type textProcessor struct{}
 
-// NewTextProcessor creates a new instance of the text payload processor.
+// NewTextProcessor returns a domain.PayloadProcessor backed by a *textProcessor.
 func NewTextProcessor() domain.PayloadProcessor {
 	return &textProcessor{}
 }
 
-// Process processes the text content and optional base64 file.
+// Process splits req.Content on req.Delimiter into items and, if req.FileBase64 is
+// set, decodes it and fills in file metadata. Returns the populated
+// *domain.ProcessResult, or an error if req is nil, the delimiter is missing
+// while content is present, the base64 payload is invalid, or ctx is cancelled.
 func (p *textProcessor) Process(ctx context.Context, req *domain.ProcessRequest) (*domain.ProcessResult, error) {
 	start := time.Now()
 	if req == nil {
@@ -29,7 +32,6 @@ func (p *textProcessor) Process(ctx context.Context, req *domain.ProcessRequest)
 
 	log.Printf("[Processor] Received request: content_len=%d, file_base64_len=%d", len(req.Content), len(req.FileBase64))
 
-	// Respect context cancellation
 	select {
 	case <-ctx.Done():
 		log.Println("[Processor] Request cancelled via context")
@@ -41,7 +43,6 @@ func (p *textProcessor) Process(ctx context.Context, req *domain.ProcessRequest)
 	var itemsProcessed int64
 	var items []string
 
-	// Process Content if present
 	if req.Content != "" {
 		if req.Delimiter == "" {
 			log.Println("[Processor] Error: Content provided but delimiter is empty")
@@ -52,7 +53,6 @@ func (p *textProcessor) Process(ctx context.Context, req *domain.ProcessRequest)
 		log.Printf("[Processor] Splitting content of size %d bytes using delimiter %q...", bytesProcessed, req.Delimiter)
 		items = strings.Split(req.Content, req.Delimiter)
 
-		// Trim trailing empty element caused by delimiter
 		if len(items) > 0 && items[len(items)-1] == "" {
 			items = items[:len(items)-1]
 		}
@@ -62,7 +62,6 @@ func (p *textProcessor) Process(ctx context.Context, req *domain.ProcessRequest)
 		items = []string{}
 	}
 
-	// Process FileBase64 if present
 	var fileMetadata *domain.FileMetadata
 	if req.FileBase64 != "" {
 		log.Println("[Processor] Cleaning and decoding base64 resume document...")

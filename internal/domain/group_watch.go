@@ -5,13 +5,11 @@ import (
 	"time"
 )
 
-// GroupInfo é o subconjunto dos metadados de um grupo do WhatsApp que a app usa.
 type GroupInfo struct {
 	JID  string `json:"jid"`
 	Name string `json:"name"`
 }
 
-// WatchedGroup é um grupo que um número está configurado para escutar.
 type WatchedGroup struct {
 	Phone     string    `json:"phone"`
 	GroupJID  string    `json:"group_jid"`
@@ -19,8 +17,6 @@ type WatchedGroup struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// BufferedMessage é uma mensagem de texto de grupo capturada pelo listener
-// ao vivo, aguardando o próximo flush (agendado ou manual) para o pipeline de vagas.
 type BufferedMessage struct {
 	MessageID  string
 	Phone      string
@@ -30,14 +26,11 @@ type BufferedMessage struct {
 	ReceivedAt time.Time
 }
 
-// FlushSchedule é o horário diário único e global em que o buffer é processado.
 type FlushSchedule struct {
 	Hour   int `json:"hour"`
 	Minute int `json:"minute"`
 }
 
-// GroupWatchRepository persiste grupos observados, o buffer de mensagens
-// pendentes e o agendamento global de flush.
 type GroupWatchRepository interface {
 	ListWatchedGroups(ctx context.Context, phone string) ([]WatchedGroup, error)
 	ListAllWatchedPhones(ctx context.Context) ([]string, error)

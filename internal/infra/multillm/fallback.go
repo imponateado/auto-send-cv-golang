@@ -12,7 +12,8 @@ type fallbackLLMService struct {
 	secondary domain.GeminiService
 }
 
-// NewFallbackLLMService creates a new LLM matching service that tries a primary provider and falls back to a secondary if it fails.
+// NewFallbackLLMService returns a domain.GeminiService that tries primary first
+// and falls back to secondary if primary fails.
 func NewFallbackLLMService(primary, secondary domain.GeminiService) domain.GeminiService {
 	return &fallbackLLMService{
 		primary:   primary,

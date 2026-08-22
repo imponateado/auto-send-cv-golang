@@ -71,7 +71,7 @@ func (s *chromemStore) AddVacancies(ctx context.Context, vacancies []string, emb
 	}
 
 	log.Printf("[ChromeStore] Adicionando %d vagas ao banco...", len(vacancies))
-	
+
 	ids := make([]string, len(vacancies))
 	metadatas := make([]map[string]string, len(vacancies))
 	for i, vacancy := range vacancies {
@@ -99,7 +99,6 @@ func (s *chromemStore) SearchSimilarity(ctx context.Context, queryEmbedding []fl
 		limit = 10
 	}
 
-	// In chromem-go v0.7.0, QueryEmbedding expects: ctx, queryEmbedding, limit, metadatas, documentContents
 	results, err := s.collection.QueryEmbedding(ctx, queryEmbedding, limit, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("chromem query failed: %w", err)

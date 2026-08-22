@@ -14,7 +14,8 @@ type sqliteRepo struct {
 	db *sql.DB
 }
 
-// Open abre a conexão com o arquivo SQLite compartilhado pelos vários repositórios da app.
+// Open abre a conexão com o arquivo SQLite em dbPath. Retorna o *sql.DB, ou erro
+// se a abertura falhar.
 func Open(dbPath string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -23,7 +24,8 @@ func Open(dbPath string) (*sql.DB, error) {
 	return db, nil
 }
 
-// NewSQLRepo garante que a tabela de credenciais exista na conexão fornecida.
+// NewSQLRepo cria a tabela de credenciais em db caso não exista. Retorna um
+// domain.CredentialsRepository, ou erro se a criação do schema falhar.
 func NewSQLRepo(db *sql.DB) (domain.CredentialsRepository, error) {
 	query := `
 	CREATE TABLE IF NOT EXISTS candidate_credentials (

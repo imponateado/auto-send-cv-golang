@@ -23,9 +23,14 @@ import (
 	"api/internal/service"
 )
 
+// main monta as dependências (config, repositórios, LLM, WhatsApp, vector
+// store), registra as rotas HTTP e bloqueia servindo requisições até receber um
+// sinal de shutdown, encerrando o servidor graciosamente. Não retorna nada;
+// termina o processo via log.Fatalf em caso de erro crítico de inicialização ou
+// do servidor.
 // @title API Go de Processamento de Texto e Documentos
 // @version 1.0
-// @description API REST em Go com Clean Architecture para processamento de textos, análise de currículos com Gemini e disparos automáticos.
+// @description Monta as dependências, registra as rotas HTTP e serve requisições até receber um sinal de shutdown, encerrando o servidor graciosamente.
 // @host localhost:8080
 // @BasePath /
 func main() {
@@ -81,14 +86,14 @@ func main() {
 		activeLLM = geminiService
 	case "deepseek":
 		activeLLM = deepseekService
-	default: // fallback
+	default:
 		activeLLM = multillm.NewFallbackLLMService(geminiService, deepseekService)
 	}
 
 	matchingOrchestrator := service.NewOrchestrator(
 		activeLLM,
 		ollamaService,
-		vectorStore, // Local Vector Database (chromem-go)
+		vectorStore,
 		credsRepo,
 		waManager,
 	)
@@ -109,8 +114,8 @@ func main() {
 	router := handler.RegisterRoutes(mux, procHandler, credsHandler, groupHandler)
 
 	server := &http.Server{
-		Addr:    ":" + cfg.Port,
-		Handler: router,
+		Addr:              ":" + cfg.Port,
+		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
@@ -134,11 +139,9 @@ func main() {
 	case sig := <-shutdownSignal:
 		log.Printf("Received shutdown signal: %v. Initiating graceful shutdown...", sig)
 
-		// Create a context with a timeout for the graceful shutdown
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
-		// Attempt to gracefully shutdown the server
 		if err := server.Shutdown(ctx); err != nil {
 			log.Printf("Could not gracefully stop server: %v. Forcing close...", err)
 			if err := server.Close(); err != nil {
