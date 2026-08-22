@@ -102,9 +102,6 @@ func main() {
 	if err := groupWatcher.Bootstrap(context.Background()); err != nil {
 		log.Printf("Warning: failed to bootstrap group watchers: %v", err)
 	}
-	schedCtx, cancelSched := context.WithCancel(context.Background())
-	defer cancelSched()
-	go groupWatcher.RunScheduler(schedCtx)
 
 	procHandler := handler.NewProcessorHandler(matchingOrchestrator)
 	credsHandler := handler.NewCredentialsHandler(credsRepo, waManager)

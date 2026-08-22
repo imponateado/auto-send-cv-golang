@@ -84,42 +84,6 @@ func (h *GroupWatchHandler) SetWatchedGroups(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// GetSchedule consulta o horário diário global de flush do buffer. Responde 200
-// com o domain.FlushSchedule, ou 500 com a mensagem de erro.
-func (h *GroupWatchHandler) GetSchedule(w http.ResponseWriter, r *http.Request) {
-	sched, err := h.svc.GetSchedule(r.Context())
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to get schedule: "+err.Error())
-		return
-	}
-
-	respondWithJSON(w, http.StatusOK, sched)
-}
-
-// SetSchedule valida e atualiza o horário diário global de flush do buffer.
-// Responde 200 com status "success", ou 400/500 com a mensagem de erro.
-func (h *GroupWatchHandler) SetSchedule(w http.ResponseWriter, r *http.Request) {
-	var req domain.FlushSchedule
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondWithError(w, http.StatusBadRequest, "Invalid JSON payload: "+err.Error())
-		return
-	}
-	if req.Hour < 0 || req.Hour > 23 || req.Minute < 0 || req.Minute > 59 {
-		respondWithError(w, http.StatusBadRequest, "Fields 'hour' (0-23) and 'minute' (0-59) must be valid")
-		return
-	}
-
-	if err := h.svc.SetSchedule(r.Context(), req); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to set schedule: "+err.Error())
-		return
-	}
-
-	respondWithJSON(w, http.StatusOK, map[string]string{
-		"status":  "success",
-		"message": "Schedule updated successfully",
-	})
-}
-
 // FlushNow dispara imediatamente o processamento do buffer de mensagens
 // pendentes. Responde 200 com a quantidade de itens processados, ou 500 com a
 // mensagem de erro.

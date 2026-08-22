@@ -13,9 +13,9 @@ type groupWatchRepo struct {
 	db *sql.DB
 }
 
-// NewGroupWatchRepo cria as tabelas de grupos observados, buffer de mensagens e
-// agendamento de flush em db caso não existam. Retorna um
-// domain.GroupWatchRepository, ou erro se a criação do schema falhar.
+// NewGroupWatchRepo cria as tabelas de grupos observados e buffer de mensagens
+// em db caso não existam. Retorna um domain.GroupWatchRepository, ou erro se a
+// criação do schema falhar.
 func NewGroupWatchRepo(db *sql.DB) (domain.GroupWatchRepository, error) {
 	query := `
 	CREATE TABLE IF NOT EXISTS watched_groups (
@@ -38,15 +38,6 @@ func NewGroupWatchRepo(db *sql.DB) (domain.GroupWatchRepository, error) {
 	);
 	CREATE INDEX IF NOT EXISTS idx_group_message_buffer_unprocessed
 		ON group_message_buffer (processed_at);
-
-	CREATE TABLE IF NOT EXISTS group_flush_schedule (
-		id         INTEGER PRIMARY KEY CHECK (id = 1),
-		hour       INTEGER NOT NULL DEFAULT 11,
-		minute     INTEGER NOT NULL DEFAULT 0,
-		updated_at DATETIME NOT NULL
-	);
-	INSERT OR IGNORE INTO group_flush_schedule (id, hour, minute, updated_at)
-		VALUES (1, 11, 0, CURRENT_TIMESTAMP);
 	`
 	if _, err := db.Exec(query); err != nil {
 		return nil, fmt.Errorf("failed to initialize group watch schema: %w", err)
@@ -182,24 +173,4 @@ func (r *groupWatchRepo) CountPending(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("failed to count pending messages: %w", err)
 	}
 	return count, nil
-}
-
-func (r *groupWatchRepo) GetSchedule(ctx context.Context) (domain.FlushSchedule, error) {
-	var sched domain.FlushSchedule
-	err := r.db.QueryRowContext(ctx, `SELECT hour, minute FROM group_flush_schedule WHERE id = 1;`).
-		Scan(&sched.Hour, &sched.Minute)
-	if err != nil {
-		return domain.FlushSchedule{}, fmt.Errorf("failed to get flush schedule: %w", err)
-	}
-	return sched, nil
-}
-
-func (r *groupWatchRepo) SetSchedule(ctx context.Context, sched domain.FlushSchedule) error {
-	_, err := r.db.ExecContext(ctx,
-		`UPDATE group_flush_schedule SET hour = ?, minute = ?, updated_at = ? WHERE id = 1;`,
-		sched.Hour, sched.Minute, time.Now())
-	if err != nil {
-		return fmt.Errorf("failed to set flush schedule: %w", err)
-	}
-	return nil
 }

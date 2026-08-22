@@ -26,11 +26,6 @@ type BufferedMessage struct {
 	ReceivedAt time.Time
 }
 
-type FlushSchedule struct {
-	Hour   int `json:"hour"`
-	Minute int `json:"minute"`
-}
-
 type GroupWatchRepository interface {
 	ListWatchedGroups(ctx context.Context, phone string) ([]WatchedGroup, error)
 	ListAllWatchedPhones(ctx context.Context) ([]string, error)
@@ -40,7 +35,4 @@ type GroupWatchRepository interface {
 	PendingMessages(ctx context.Context) ([]BufferedMessage, error)
 	MarkProcessed(ctx context.Context, phone string, messageIDs []string) error
 	CountPending(ctx context.Context) (int, error)
-
-	GetSchedule(ctx context.Context) (FlushSchedule, error)
-	SetSchedule(ctx context.Context, sched FlushSchedule) error
 }

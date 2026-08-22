@@ -7,6 +7,7 @@ import (
 	"time"
 
 	_ "api/docs"
+
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
@@ -44,8 +45,6 @@ func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler, credsHand
 	mux.HandleFunc("GET /api/v1/whatsapp/groups", groupHandler.ListGroups)
 	mux.HandleFunc("GET /api/v1/whatsapp/groups/watched", groupHandler.GetWatchedGroups)
 	mux.HandleFunc("PUT /api/v1/whatsapp/groups/watched", groupHandler.SetWatchedGroups)
-	mux.HandleFunc("GET /api/v1/whatsapp/groups/schedule", groupHandler.GetSchedule)
-	mux.HandleFunc("PUT /api/v1/whatsapp/groups/schedule", groupHandler.SetSchedule)
 	mux.HandleFunc("POST /api/v1/whatsapp/groups/flush", groupHandler.FlushNow)
 	mux.HandleFunc("GET /api/v1/whatsapp/groups/status", groupHandler.Status)
 

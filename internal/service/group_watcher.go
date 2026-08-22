@@ -18,12 +18,15 @@ type FlushStatus struct {
 	PendingCount int        `json:"pending_count"`
 }
 
+var debounceDelay = 10 * time.Minute
+
 type GroupWatcher struct {
 	repo         domain.GroupWatchRepository
 	waManager    *whatsapp.WhatsMeowManager
 	orchestrator domain.Orchestrator
 
-	rescheduleCh chan struct{}
+	debounceMu    sync.Mutex
+	debounceTimer *time.Timer
 
 	statusMu  sync.RWMutex
 	lastRun   time.Time
@@ -38,7 +41,6 @@ func NewGroupWatcher(repo domain.GroupWatchRepository, waManager *whatsapp.Whats
 		repo:         repo,
 		waManager:    waManager,
 		orchestrator: orchestrator,
-		rescheduleCh: make(chan struct{}, 1),
 	}
 }
 
@@ -66,29 +68,26 @@ func (s *GroupWatcher) SetWatchedGroups(ctx context.Context, phone string, group
 	return s.waManager.WatchGroups(ctx, phone, jids, s.onMessage)
 }
 
-// onMessage grava msg no buffer de persistência. Não retorna nada ao chamador;
-// erros de persistência só são logados.
+// onMessage grave msg no buffer de persistência e reinicia o debounce do flush automático. Não retorna nada ao chamador; erros de persistência só são logados.
 func (s *GroupWatcher) onMessage(_ string, msg domain.BufferedMessage) {
 	if err := s.repo.BufferMessage(context.Background(), msg); err != nil {
 		log.Printf("[GroupWatcher] failed to buffer message: %v", err)
 	}
+	s.resetDebounce()
 }
 
-func (s *GroupWatcher) GetSchedule(ctx context.Context) (domain.FlushSchedule, error) {
-	return s.repo.GetSchedule(ctx)
-}
-
-// SetSchedule persiste o novo horário e acorda o scheduler para recalcular a
-// próxima execução. Retorna erro apenas se a persistência falhar.
-func (s *GroupWatcher) SetSchedule(ctx context.Context, sched domain.FlushSchedule) error {
-	if err := s.repo.SetSchedule(ctx, sched); err != nil {
-		return err
+// resetDebounce reinicia o timer de debounce do flush automático: se debounceDelay se passar sem uma nova mensagem, dispara FlushNow sozinho.
+func (s *GroupWatcher) resetDebounce() {
+	s.debounceMu.Lock()
+	defer s.debounceMu.Unlock()
+	if s.debounceTimer != nil {
+		s.debounceTimer.Stop()
 	}
-	select {
-	case s.rescheduleCh <- struct{}{}:
-	default:
-	}
-	return nil
+	s.debounceTimer = time.AfterFunc(debounceDelay, func() {
+		if _, err := s.FlushNow(context.Background()); err != nil {
+			log.Printf("[GroupWatcher] debounced flush failed: %v", err)
+		}
+	})
 }
 
 // FlushNow drena as mensagens pendentes do buffer através do orchestrator, num
@@ -192,36 +191,4 @@ func (s *GroupWatcher) Bootstrap(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-func nextOccurrence(now time.Time, hour, minute int) time.Duration {
-	next := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
-	if !next.After(now) {
-		next = next.Add(24 * time.Hour)
-	}
-	return next.Sub(now)
-}
-
-// RunScheduler bloqueia, disparando FlushNow no horário configurado (HH:MM) a
-// cada dia ou imediatamente após um SetSchedule. Não retorna nada; encerra
-// quando ctx é cancelado.
-func (s *GroupWatcher) RunScheduler(ctx context.Context) {
-	for {
-		sched, err := s.repo.GetSchedule(context.Background())
-		wait := 24 * time.Hour
-		if err == nil {
-			wait = nextOccurrence(time.Now(), sched.Hour, sched.Minute)
-		}
-
-		select {
-		case <-time.After(wait):
-			if _, err := s.FlushNow(context.Background()); err != nil {
-				log.Printf("[GroupWatcher] scheduled flush failed: %v", err)
-			}
-		case <-s.rescheduleCh:
-			continue
-		case <-ctx.Done():
-			return
-		}
-	}
 }
