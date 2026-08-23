@@ -2,10 +2,13 @@ package domain
 
 import "context"
 
+// Vacancy é uma vaga do banco vetorial. ID (hash sha256 do texto) é a identidade
+// estável; Index é só a posição no resultado desta consulta, para exibição.
 type Vacancy struct {
-	Index int    `json:"index"`
-	Text  string `json:"text"`
-	ID    string `json:"id"`
+	Index int     `json:"index"`
+	Text  string  `json:"text"`
+	ID    string  `json:"id"`
+	Score float32 `json:"score"`
 }
 
 type VectorStore interface {

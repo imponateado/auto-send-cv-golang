@@ -72,18 +72,16 @@ func (s *chromemStore) AddVacancies(ctx context.Context, vacancies []string, emb
 
 	log.Printf("[ChromeStore] Adicionando %d vagas ao banco...", len(vacancies))
 
+	// O ID (hash do texto) é a única identidade que a vaga precisa: gravar um
+	// índice na metadata guardaria a posição dentro *deste* lote, que recomeça do
+	// zero a cada chamada e colidiria entre lotes.
 	ids := make([]string, len(vacancies))
-	metadatas := make([]map[string]string, len(vacancies))
 	for i, vacancy := range vacancies {
-		trimmed := strings.TrimSpace(vacancy)
-		hash := sha256.Sum256([]byte(trimmed))
+		hash := sha256.Sum256([]byte(strings.TrimSpace(vacancy)))
 		ids[i] = fmt.Sprintf("vac_%x", hash)
-		metadatas[i] = map[string]string{
-			"index": fmt.Sprintf("%d", i),
-		}
 	}
 
-	err := s.collection.Add(ctx, ids, embeddings, metadatas, vacancies)
+	err := s.collection.Add(ctx, ids, embeddings, nil, vacancies)
 	if err != nil {
 		return fmt.Errorf("failed to add documents to chromem collection: %w", err)
 	}
@@ -108,14 +106,11 @@ func (s *chromemStore) SearchSimilarity(ctx context.Context, queryEmbedding []fl
 	for _, res := range results {
 		log.Printf("[ChromeStore] Vaga ID=%s - Similaridade de Cosseno: %.4f", res.ID, res.Similarity)
 		if res.Similarity >= threshold {
-			var origIdx int
-			if _, err := fmt.Sscanf(res.Metadata["index"], "%d", &origIdx); err != nil {
-				origIdx = 0
-			}
 			matchedVacancies = append(matchedVacancies, domain.Vacancy{
-				Index: origIdx,
+				Index: len(matchedVacancies),
 				Text:  res.Content,
 				ID:    res.ID,
+				Score: res.Similarity,
 			})
 		}
 	}
@@ -142,12 +137,13 @@ func (s *chromemStore) ListVacancies(ctx context.Context, queryEmbedding []float
 	}
 
 	vacancies := make([]domain.Vacancy, 0, len(results))
-	for _, res := range results {
-		var origIdx int
-		if _, err := fmt.Sscanf(res.Metadata["index"], "%d", &origIdx); err != nil {
-			origIdx = 0
-		}
-		vacancies = append(vacancies, domain.Vacancy{Index: origIdx, Text: res.Content, ID: res.ID})
+	for i, res := range results {
+		vacancies = append(vacancies, domain.Vacancy{
+			Index: i,
+			Text:  res.Content,
+			ID:    res.ID,
+			Score: res.Similarity,
+		})
 	}
 	return vacancies, nil
 }

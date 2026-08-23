@@ -72,8 +72,8 @@ func (m *mockVectorStore) SearchSimilarity(ctx context.Context, queryEmbedding [
 		return m.searchSimilarityFn(ctx, queryEmbedding, limit, threshold)
 	}
 	return []domain.Vacancy{
-		{Index: 0, Text: "vaga 1"},
-		{Index: 1, Text: "vaga 2"},
+		{Index: 0, Text: "vaga 1", ID: "vac_aaa", Score: 0.91},
+		{Index: 1, Text: "vaga 2", ID: "vac_bbb", Score: 0.72},
 	}, nil
 }
 
@@ -334,7 +334,13 @@ func TestOrchestrator_Methods(t *testing.T) {
 		}
 
 		if len(res.Matches) != 2 {
-			t.Errorf("expected 2 matches, got: %d", len(res.Matches))
+			t.Fatalf("expected 2 matches, got: %d", len(res.Matches))
+		}
+		// O índice que a LLM devolve é posicional na lista pré-filtrada; o que
+		// identifica a vaga de verdade é o ID carregado a partir dele.
+		if res.Matches[0].VacancyID != "vac_aaa" || res.Matches[1].VacancyID != "vac_bbb" {
+			t.Errorf("match deve carregar o ID da vaga pré-filtrada, got %q e %q",
+				res.Matches[0].VacancyID, res.Matches[1].VacancyID)
 		}
 		if emailCalls != 1 {
 			t.Errorf("expected 1 email call, got: %d", emailCalls)

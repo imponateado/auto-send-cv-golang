@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -53,14 +52,7 @@ type dispatchResult struct {
 	status string
 }
 
-type vacancyScore struct {
-	Index  int
-	Score  float32
-	Passed bool
-	Text   string
-}
-
-func writeExecutionLog(filename string, startTime time.Time, processedCount int64, matchCount int, results []dispatchResult, scores []vacancyScore, skippedReason string) error {
+func writeExecutionLog(filename string, startTime time.Time, processedCount int64, matchCount int, results []dispatchResult, vacancies []domain.Vacancy, skippedReason string) error {
 	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		return err
@@ -79,16 +71,14 @@ func writeExecutionLog(filename string, startTime time.Time, processedCount int6
 		builder.WriteString(fmt.Sprintf("Vagas processadas no chat: %d\n", processedCount))
 		builder.WriteString(fmt.Sprintf("Matches confirmados pela LLM: %d\n\n", matchCount))
 
+		// Só chegam aqui as vagas que já passaram do threshold em SearchSimilarity,
+		// então não existe caso "descartada" para relatar.
 		builder.WriteString(fmt.Sprintf("================================================================================\n"))
-		builder.WriteString(fmt.Sprintf("PRÉ-FILTRAGEM DE SIMILARIDADE SEMÂNTICA (EM MEMÓRIA):\n"))
+		builder.WriteString(fmt.Sprintf("VAGAS APROVADAS NA PRÉ-FILTRAGEM SEMÂNTICA:\n"))
 		builder.WriteString(fmt.Sprintf("--------------------------------------------------------------------------------\n"))
-		for _, s := range scores {
-			statusStr := "[DESCARTADA]"
-			if s.Passed {
-				statusStr = "[PASSOU]"
-			}
-			builder.WriteString(fmt.Sprintf("[Vaga %d] Score Cosseno: %.4f -> %s\n", s.Index, s.Score, statusStr))
-			builder.WriteString(fmt.Sprintf("- Conteúdo: %s\n", strings.ReplaceAll(strings.TrimSpace(s.Text), "\n", " / ")))
+		for _, v := range vacancies {
+			builder.WriteString(fmt.Sprintf("[%s] Score Cosseno: %.4f\n", v.ID, v.Score))
+			builder.WriteString(fmt.Sprintf("- Conteúdo: %s\n", strings.ReplaceAll(strings.TrimSpace(v.Text), "\n", " / ")))
 			builder.WriteString("\n")
 		}
 
@@ -97,16 +87,16 @@ func writeExecutionLog(filename string, startTime time.Time, processedCount int6
 		builder.WriteString(fmt.Sprintf("--------------------------------------------------------------------------------\n"))
 		for i, r := range results {
 			builder.WriteString(fmt.Sprintf("[MATCH %d]\n", i+1))
-			builder.WriteString(fmt.Sprintf("- Índice Original da Vaga: %d\n", r.match.Index))
+			builder.WriteString(fmt.Sprintf("- ID da Vaga: %s\n", r.match.VacancyID))
 			builder.WriteString(fmt.Sprintf("- Tipo de Contato: %s\n", r.match.ContactType))
 			builder.WriteString(fmt.Sprintf("- Destino de Envio: %s\n", r.match.ContactTarget))
 			builder.WriteString(fmt.Sprintf("- Justificativa da LLM: %s\n", r.match.Reason))
 			builder.WriteString(fmt.Sprintf("- Status de Envio: %s\n", r.status))
 
 			var vacText string
-			for _, s := range scores {
-				if s.Index == r.match.Index {
-					vacText = s.Text
+			for _, v := range vacancies {
+				if v.ID == r.match.VacancyID {
+					vacText = v.Text
 					break
 				}
 			}
@@ -118,22 +108,6 @@ func writeExecutionLog(filename string, startTime time.Time, processedCount int6
 
 	_, err = file.WriteString(builder.String())
 	return err
-}
-
-func cosineSimilarity(a, b []float32) float32 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-	var dotProduct, normA, normB float64
-	for i := range a {
-		dotProduct += float64(a[i] * b[i])
-		normA += float64(a[i] * a[i])
-		normB += float64(b[i] * b[i])
-	}
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-	return float32(dotProduct / (math.Sqrt(normA) * math.Sqrt(normB)))
 }
 
 // ClearVacancies apaga todas as vagas da tabela local do banco vetorial. Retorna
@@ -151,8 +125,11 @@ func (o *orchestrator) PopulateVacancyTexts(ctx context.Context, texts []string)
 // banco vetorial falhar.
 func (o *orchestrator) ListVacancies(ctx context.Context) ([]domain.Vacancy, error) {
 	embs, err := o.embeddingService.GetEmbeddings(ctx, []string{"."})
-	if err != nil || len(embs) == 0 {
+	if err != nil {
 		return nil, fmt.Errorf("failed to get placeholder embedding: %w", err)
+	}
+	if len(embs) == 0 {
+		return nil, fmt.Errorf("embedding service returned no placeholder embedding")
 	}
 	return o.vectorStore.ListVacancies(ctx, embs[0])
 }
@@ -351,65 +328,56 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 	matchRes, err := o.geminiService.MatchResume(ctx, fileB64, fileMime, filteredTexts)
 	if err != nil {
 		log.Printf("[Orchestrator] LLM validation matching falhou: %v", err)
-		var dummyScores []vacancyScore
-		for _, v := range matchedVacancies {
-			dummyScores = append(dummyScores, vacancyScore{Index: v.Index, Text: v.Text, Passed: true})
-		}
-		_ = writeExecutionLog(logFilename, start, 0, 0, nil, dummyScores, fmt.Sprintf("Erro no refino de matching LLM: %v", err))
+		_ = writeExecutionLog(logFilename, start, 0, 0, nil, matchedVacancies, fmt.Sprintf("Erro no refino de matching LLM: %v", err))
 		return nil, fmt.Errorf("LLM matching failed: %w", err)
 	}
 
 	var validMatches []domain.Match
 	for i := range matchRes.Matches {
 		idx := matchRes.Matches[i].Index
-		if idx >= 0 && idx < len(matchedVacancies) {
-			origIdx := matchedVacancies[idx].Index
-			log.Printf("[Orchestrator] Mapeamento de índice: LLM index %d -> original index %d", idx, origIdx)
-			matchRes.Matches[i].Index = origIdx
-			validMatches = append(validMatches, matchRes.Matches[i])
-		} else {
+		if idx < 0 || idx >= len(matchedVacancies) {
 			log.Printf("[Orchestrator] Aviso: LLM retornou índice fora do escopo (%d)", idx)
+			continue
 		}
+		matchRes.Matches[i].VacancyID = matchedVacancies[idx].ID
+		log.Printf("[Orchestrator] LLM index %d -> vaga %s", idx, matchedVacancies[idx].ID)
+		validMatches = append(validMatches, matchRes.Matches[i])
 	}
 	matchRes.Matches = validMatches
 	log.Printf("[Orchestrator] LLM validou %d matches finais.", len(matchRes.Matches))
 
-	var dispatchResults []dispatchResult
-	var scores []vacancyScore
-	for _, v := range matchedVacancies {
-		scores = append(scores, vacancyScore{
-			Index:  v.Index,
-			Score:  1.0,
-			Passed: true,
-			Text:   v.Text,
-		})
+	// Credenciais e cliente de e-mail são os mesmos para todos os matches: buscar
+	// dentro do loop faria uma leitura no banco e um refresh de token por disparo.
+	var emailService domain.EmailService
+	emailUnavailable := "Não disparado (e-mail do candidato não fornecido)"
+	if candidateEmail != "" {
+		log.Printf("[Orchestrator] Obtendo credenciais OAuth2 para o candidato %s...", candidateEmail)
+		creds, err := o.credsRepo.GetEmailCredentials(ctx, candidateEmail)
+		if err != nil {
+			log.Printf("[Orchestrator] Erro ao carregar credenciais para %s: %v", candidateEmail, err)
+			emailUnavailable = fmt.Sprintf("Erro ao carregar credenciais de e-mail: %v", err)
+		} else {
+			emailService = o.newEmailService(creds)
+		}
 	}
 
+	var dispatchResults []dispatchResult
 	for i, match := range matchRes.Matches {
-		log.Printf("[Orchestrator] Processando disparo %d/%d (original index: %d, contato: %s, destino: %s)", i+1, len(matchRes.Matches), match.Index, match.ContactType, match.ContactTarget)
+		log.Printf("[Orchestrator] Processando disparo %d/%d (vaga: %s, contato: %s, destino: %s)", i+1, len(matchRes.Matches), match.VacancyID, match.ContactType, match.ContactTarget)
 		status := "Não disparado (sem contato válido)"
 		switch match.ContactType {
 		case "email":
-			if candidateEmail == "" {
-				log.Println("[Orchestrator] E-mail do candidato não fornecido na requisição. Pulando disparo.")
-				status = "Não disparado (e-mail do candidato não fornecido)"
-				break
-			}
-
-			log.Printf("[Orchestrator] Obtendo credenciais OAuth2 para o candidato %s...", candidateEmail)
-			creds, err := o.credsRepo.GetEmailCredentials(ctx, candidateEmail)
-			if err != nil {
-				log.Printf("[Orchestrator] Erro ao carregar credenciais para %s: %v", candidateEmail, err)
-				status = fmt.Sprintf("Erro ao carregar credenciais de e-mail: %v", err)
+			if emailService == nil {
+				log.Printf("[Orchestrator] Sem serviço de e-mail disponível: %s", emailUnavailable)
+				status = emailUnavailable
 				break
 			}
 
 			log.Printf("[Orchestrator] Enviando E-mail -> para: %s...", match.ContactTarget)
 			subject := "Candidatura - Processamento Automático"
-			body := fmt.Sprintf("Olá,\n\nEstou me candidatando à vaga de emprego número %d.\n\nMotivo da compatibilidade:\n%s\n\nEm anexo, envio meu currículo para avaliação.\n\nAtenciosamente,\nCandidato", match.Index+1, match.Reason)
+			body := fmt.Sprintf("Olá,\n\nEstou me candidatando à sua vaga de emprego.\n\nMotivo da compatibilidade:\n%s\n\nEm anexo, envio meu currículo para avaliação.\n\nAtenciosamente,\nCandidato", match.Reason)
 
-			emailService := o.newEmailService(creds)
-			err = emailService.SendEmail(ctx, match.ContactTarget, subject, body, fileB64, "curriculo.pdf")
+			err := emailService.SendEmail(ctx, match.ContactTarget, subject, body, fileB64, "curriculo.pdf")
 			if err != nil {
 				log.Printf("[Orchestrator] Falha no e-mail para %s: %v", match.ContactTarget, err)
 				status = fmt.Sprintf("Erro no envio do e-mail: %v", err)
@@ -455,7 +423,7 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 		})
 	}
 
-	err = writeExecutionLog(logFilename, start, int64(len(scores)), len(matchRes.Matches), dispatchResults, scores, "")
+	err = writeExecutionLog(logFilename, start, int64(len(matchedVacancies)), len(matchRes.Matches), dispatchResults, matchedVacancies, "")
 	if err != nil {
 		log.Printf("[Orchestrator] Erro ao gravar arquivo de log %s: %v", logFilename, err)
 	}
@@ -468,4 +436,3 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 	o.recordMatch(result)
 	return result, nil
 }
-
