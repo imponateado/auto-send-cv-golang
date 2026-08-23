@@ -92,6 +92,44 @@ func (h *CredentialsHandler) DeleteCredentials(w http.ResponseWriter, r *http.Re
 	})
 }
 
+type credentialSummary struct {
+	Email    string `json:"email"`
+	Provider string `json:"provider"`
+}
+
+// ListCredentials lista as credenciais de e-mail cadastradas via h.credsRepo, sem expor refresh_token/client_secret. Responde 200 com a lista, ou 500 com a msg de erro.
+func (h *CredentialsHandler) ListCredentials(w http.ResponseWriter, r *http.Request) {
+	creds, err := h.credsRepo.ListEmailCredentials(r.Context())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to list credentials: "+err.Error())
+		return
+	}
+
+	summaries := make([]credentialSummary, len(creds))
+	for i, c := range creds {
+		summaries[i] = credentialSummary{Email: c.Email, Provider: c.Provider}
+	}
+
+	respondWithJSON(w, http.StatusOK, summaries)
+}
+
+// GetCredentials consulta as credenciais do candidato identificado pelo parâmetro de rota {email}, sem expor refresh_token/client_secret. Responde 200 com o resumo, ou 400/404 com msg de erro.
+func (h *CredentialsHandler) GetCredentials(w http.ResponseWriter, r *http.Request) {
+	email := r.PathValue("email")
+	if email == "" {
+		respondWithError(w, http.StatusBadRequest, "Email parameter is required")
+		return
+	}
+
+	creds, err := h.credsRepo.GetEmailCredentials(r.Context(), email)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, credentialSummary{Email: creds.Email, Provider: creds.Provider})
+}
+
 // GetWhatsAppQR gera (ou recupera) o QR code de pareamento para o número em
 // ?phone=. Responde com a imagem PNG do QR, ou 200/success se já autenticado, ou
 // 400/500 com a mensagem de erro.

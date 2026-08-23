@@ -1,143 +1,165 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>API Vagas — Painel</title>
-<link rel="stylesheet" href="styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Vagas — Painel</title>
+  <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
-<header>
-  <h1>Painel — API de Vagas</h1>
-  <div class="api-base">
-    <label for="apiBase">API base URL</label>
-    <input id="apiBase" type="text" placeholder="http://localhost:8080">
-    <span id="apiBaseStatus" class="dot" title="status"></span>
-  </div>
-</header>
-
-<nav class="tabs">
-  <button class="tab-btn active" data-tab="vagas">Vagas</button>
-  <button class="tab-btn" data-tab="match">Match Currículo</button>
-  <button class="tab-btn" data-tab="credenciais">Credenciais Email</button>
-  <button class="tab-btn" data-tab="whatsapp">WhatsApp</button>
-  <button class="tab-btn" data-tab="grupos">Grupos</button>
-</nav>
-
-<main>
-
-  <!-- VAGAS -->
-  <section id="vagas" class="tab-panel active">
-    <div class="card">
-      <h2>Limpar banco de vagas</h2>
-      <p class="hint">Remove todas as vagas e coleções do banco vetorial local.</p>
-      <button id="clearBtn" class="danger">Limpar vagas</button>
-      <div id="clearResult" class="result"></div>
+  <header>
+    <h1>Painel — API de Vagas</h1>
+    <div class="api-base">
+      <label for="apiBase">API base URL</label>
+      <input id="apiBase" type="text" placeholder="http://localhost:8080">
+      <span id="apiBaseStatus" class="dot" title="status"></span>
     </div>
+  </header>
 
-    <div class="card">
-      <h2>Listar vagas</h2>
-      <button id="listVacanciesBtn">Listar vagas</button>
-      <div id="listVacanciesResult" class="result"></div>
-    </div>
-  </section>
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="vagas">Vagas</button>
+    <button class="tab-btn" data-tab="match">Match Currículo</button>
+    <button class="tab-btn" data-tab="credenciais">Credenciais Email</button>
+    <button class="tab-btn" data-tab="whatsapp">WhatsApp</button>
+    <button class="tab-btn" data-tab="grupos">Grupos</button>
+  </nav>
 
-  <!-- MATCH -->
-  <section id="match" class="tab-panel">
-    <div class="card">
-      <h2>Match de currículo</h2>
-      <form id="matchForm">
-        <label for="matchFile">Currículo (PDF)</label>
-        <input id="matchFile" type="file" accept="application/pdf" required>
-        <label for="matchEmail">Email do candidato (opcional)</label>
-        <input id="matchEmail" type="email" placeholder="candidato@email.com">
-        <label for="matchPhone">Telefone do candidato (opcional)</label>
-        <input id="matchPhone" type="text" placeholder="5511999999999">
-        <button type="submit">Executar match</button>
-      </form>
-      <div id="matchResult" class="result"></div>
-    </div>
-  </section>
+  <main>
 
-  <!-- CREDENCIAIS -->
-  <section id="credenciais" class="tab-panel">
-    <div class="card">
-      <h2>Registrar credenciais de email</h2>
-      <form id="credsForm">
-        <label for="credsEmail">Email</label>
-        <input id="credsEmail" type="email" required>
-        <label for="credsProvider">Provedor</label>
-        <select id="credsProvider" required>
-          <option value="google">Google</option>
-          <option value="microsoft">Microsoft</option>
-        </select>
-        <label for="credsClientId">Client ID</label>
-        <input id="credsClientId" type="text" required>
-        <label for="credsClientSecret">Client Secret</label>
-        <input id="credsClientSecret" type="password" required>
-        <label for="credsRefreshToken">Refresh Token</label>
-        <input id="credsRefreshToken" type="password" required>
-        <button type="submit">Salvar credenciais</button>
-      </form>
-      <div id="credsResult" class="result"></div>
-    </div>
-
-    <div class="card">
-      <h2>Remover credenciais</h2>
-      <form id="credsDeleteForm">
-        <label for="credsDeleteEmail">Email</label>
-        <input id="credsDeleteEmail" type="email" required>
-        <button type="submit" class="danger">Remover</button>
-      </form>
-      <div id="credsDeleteResult" class="result"></div>
-    </div>
-  </section>
-
-  <!-- WHATSAPP -->
-  <section id="whatsapp" class="tab-panel">
-    <div class="card">
-      <h2>Conexões ativas</h2>
-      <button id="wappListBtn">Atualizar lista</button>
-      <div id="wappListResult" class="result"></div>
-    </div>
-
-    <div class="card">
-      <h2>Conectar número (QR Code)</h2>
-      <form id="wappQrForm">
-        <label for="wappQrPhone">Telefone</label>
-        <input id="wappQrPhone" type="text" placeholder="5511999999999" required>
-        <button type="submit">Gerar QR Code</button>
-      </form>
-      <div id="wappQrResult" class="result"></div>
-    </div>
-
-  </section>
-
-  <!-- GRUPOS -->
-  <section id="grupos" class="tab-panel">
-    <div class="card">
-      <h2>Grupos do WhatsApp</h2>
-      <label for="groupsPhone">Telefone</label>
-      <input id="groupsPhone" type="text" placeholder="5511999999999">
-      <div class="btn-row">
-        <button id="groupsListBtn">Listar grupos</button>
-        <button id="groupsWatchedBtn">Grupos monitorados</button>
+    <!-- VAGAS -->
+    <section id="vagas" class="tab-panel active">
+      <div class="card">
+        <h2>Limpar banco de vagas</h2>
+        <p class="hint">Remove todas as vagas e coleções do banco vetorial local.</p>
+        <button id="clearBtn" class="danger">Limpar vagas</button>
+        <div id="clearResult" class="result"></div>
       </div>
-      <div id="groupsList" class="result"></div>
-    </div>
 
-    <div class="card">
-      <h2>Buffer de mensagens</h2>
-      <div class="btn-row">
-        <button id="flushBtn">Forçar flush agora</button>
-        <button id="statusBtn">Status do watcher</button>
+      <div class="card">
+        <h2>Listar vagas</h2>
+        <button id="listVacanciesBtn">Listar vagas</button>
+        <div id="listVacanciesResult" class="result"></div>
       </div>
-      <div id="bufferResult" class="result"></div>
-    </div>
-  </section>
+    </section>
 
-</main>
+    <!-- MATCH -->
+    <section id="match" class="tab-panel">
+      <div class="card">
+        <h2>Match de currículo</h2>
+        <form id="matchForm">
+          <label for="matchFile">Currículo (PDF)</label>
+          <input id="matchFile" type="file" accept="application/pdf" required>
+          <label for="matchEmail">Email do candidato (opcional)</label>
+          <input id="matchEmail" type="email" placeholder="candidato@email.com">
+          <label for="matchPhone">Telefone do candidato (opcional)</label>
+          <input id="matchPhone" type="text" placeholder="5511999999999">
+          <button type="submit">Executar match</button>
+        </form>
+        <div id="matchResult" class="result"></div>
+      </div>
 
-<script src="app.js"></script>
+      <div class="card">
+        <h2>Histórico de matches</h2>
+        <button id="matchesListBtn">Listar histórico</button>
+        <div id="matchesListResult" class="result"></div>
+      </div>
+    </section>
+
+    <!-- CREDENCIAIS -->
+    <section id="credenciais" class="tab-panel">
+      <div class="card">
+        <h2>Registrar credenciais de email</h2>
+        <form id="credsForm">
+          <label for="credsEmail">Email</label>
+          <input id="credsEmail" type="email" required>
+          <label for="credsProvider">Provedor</label>
+          <select id="credsProvider" required>
+            <option value="google">Google</option>
+            <option value="microsoft">Microsoft</option>
+          </select>
+          <label for="credsClientId">Client ID</label>
+          <input id="credsClientId" type="text" required>
+          <label for="credsClientSecret">Client Secret</label>
+          <input id="credsClientSecret" type="password" required>
+          <label for="credsRefreshToken">Refresh Token</label>
+          <input id="credsRefreshToken" type="password" required>
+          <button type="submit">Salvar credenciais</button>
+        </form>
+        <div id="credsResult" class="result"></div>
+      </div>
+
+      <div class="card">
+        <h2>Remover credenciais</h2>
+        <form id="credsDeleteForm">
+          <label for="credsDeleteEmail">Email</label>
+          <input id="credsDeleteEmail" type="email" required>
+          <button type="submit" class="danger">Remover</button>
+        </form>
+        <div id="credsDeleteResult" class="result"></div>
+      </div>
+
+      <div class="card">
+        <h2>Credenciais cadastradas</h2>
+        <button id="credsListBtn">Listar</button>
+        <div id="credsListResult" class="result"></div>
+      </div>
+    </section>
+
+    <!-- WHATSAPP -->
+    <section id="whatsapp" class="tab-panel">
+      <div class="card">
+        <h2>Conexões ativas</h2>
+        <button id="wappListBtn">Atualizar lista</button>
+        <div id="wappListResult" class="result"></div>
+      </div>
+
+      <div class="card">
+        <h2>Conectar número (QR Code)</h2>
+        <form id="wappQrForm">
+          <label for="wappQrPhone">Telefone</label>
+          <input id="wappQrPhone" type="text" placeholder="5511999999999" required>
+          <button type="submit">Gerar QR Code</button>
+        </form>
+        <div id="wappQrResult" class="result"></div>
+      </div>
+
+    </section>
+
+    <!-- GRUPOS -->
+    <section id="grupos" class="tab-panel">
+      <div class="card">
+        <h2>Grupos do WhatsApp</h2>
+        <label for="groupsPhone">Telefone</label>
+        <input id="groupsPhone" type="text" placeholder="5511999999999">
+        <div class="btn-row">
+          <button id="groupsListBtn">Listar grupos</button>
+          <button id="groupsWatchedBtn">Grupos monitorados</button>
+          <button id="groupsUnwatchAllBtn" class="danger">Parar de monitorar tudo</button>
+        </div>
+        <div id="groupsList" class="result"></div>
+      </div>
+
+      <div class="card">
+        <h2>Telefones monitorando grupos</h2>
+        <button id="watchedPhonesBtn">Listar telefones</button>
+        <div id="watchedPhonesResult" class="result"></div>
+      </div>
+
+      <div class="card">
+        <h2>Buffer de mensagens</h2>
+        <div class="btn-row">
+          <button id="flushBtn">Forçar flush agora</button>
+          <button id="statusBtn">Status do watcher</button>
+        </div>
+        <div id="bufferResult" class="result"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="app.js"></script>
 </body>
+
 </html>

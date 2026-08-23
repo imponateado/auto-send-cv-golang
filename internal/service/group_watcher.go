@@ -52,6 +52,10 @@ func (s *GroupWatcher) GetWatchedGroups(ctx context.Context, phone string) ([]do
 	return s.repo.ListWatchedGroups(ctx, phone)
 }
 
+func (s *GroupWatcher) ListWatchedPhones(ctx context.Context) ([]string, error) {
+	return s.repo.ListAllWatchedPhones(ctx)
+}
+
 // SetWatchedGroups persiste o conjunto de grupos observados para phone e reinstala
 // o listener ao vivo com o conjunto atualizado. Retorna erro se a persistência ou
 // a reinstalação do listener falhar.

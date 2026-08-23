@@ -10,8 +10,9 @@ import (
 )
 
 type mockGroupWatchRepo struct {
-	mu   sync.Mutex
-	msgs []domain.BufferedMessage
+	mu     sync.Mutex
+	msgs   []domain.BufferedMessage
+	phones []string
 }
 
 func (r *mockGroupWatchRepo) ListWatchedGroups(ctx context.Context, phone string) ([]domain.WatchedGroup, error) {
@@ -19,7 +20,7 @@ func (r *mockGroupWatchRepo) ListWatchedGroups(ctx context.Context, phone string
 }
 
 func (r *mockGroupWatchRepo) ListAllWatchedPhones(ctx context.Context) ([]string, error) {
-	return nil, nil
+	return r.phones, nil
 }
 
 func (r *mockGroupWatchRepo) SetWatchedGroups(ctx context.Context, phone string, groups []domain.GroupInfo) error {
@@ -79,8 +80,24 @@ func (m *mockOrchestrator) ListVacancies(ctx context.Context) ([]domain.Vacancy,
 	return nil, nil
 }
 
+func (m *mockOrchestrator) DeleteVacancy(ctx context.Context, id string) error {
+	return nil
+}
+
 func (m *mockOrchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candidateEmail, candidatePhone string) (*domain.ProcessResult, error) {
 	return nil, nil
+}
+
+func (m *mockOrchestrator) ListMatches(ctx context.Context) ([]*domain.MatchRecord, error) {
+	return nil, nil
+}
+
+func (m *mockOrchestrator) GetMatch(ctx context.Context, id string) (*domain.MatchRecord, error) {
+	return nil, nil
+}
+
+func (m *mockOrchestrator) DeleteMatch(ctx context.Context, id string) error {
+	return nil
 }
 
 func TestGroupWatcherDebounce(t *testing.T) {
@@ -126,5 +143,18 @@ func TestGroupWatcherDebounceResetOnNewMessage(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	if orch.calls.Load() != 1 {
 		t.Fatalf("expected exactly 1 flush after reset delay elapses, got %d", orch.calls.Load())
+	}
+}
+
+func TestGroupWatcherListWatchedPhones(t *testing.T) {
+	repo := &mockGroupWatchRepo{phones: []string{"5511999999999", "5511888888888"}}
+	gw := NewGroupWatcher(repo, nil, &mockOrchestrator{})
+
+	got, err := gw.ListWatchedPhones(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 phones, got: %d", len(got))
 	}
 }

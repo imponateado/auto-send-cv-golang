@@ -53,6 +53,19 @@ func (h *GroupWatchHandler) GetWatchedGroups(w http.ResponseWriter, r *http.Requ
 	respondWithJSON(w, http.StatusOK, groups)
 }
 
+// ListWatchedPhones lista todos os telefones que têm pelo menos um grupo
+// monitorado. Responde 200 com a lista de telefones, ou 500 com a mensagem de
+// erro.
+func (h *GroupWatchHandler) ListWatchedPhones(w http.ResponseWriter, r *http.Request) {
+	phones, err := h.svc.ListWatchedPhones(r.Context())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to list watched phones: "+err.Error())
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, phones)
+}
+
 type setWatchedGroupsRequest struct {
 	Groups []domain.GroupInfo `json:"groups"`
 }
@@ -81,6 +94,28 @@ func (h *GroupWatchHandler) SetWatchedGroups(w http.ResponseWriter, r *http.Requ
 	respondWithJSON(w, http.StatusOK, map[string]string{
 		"status":  "success",
 		"message": "Watched groups updated successfully",
+	})
+}
+
+// UnwatchAllGroups remove todos os grupos monitorados do número em ?phone=
+// (equivalente a um SetWatchedGroups com lista vazia, mas como uma ação
+// explícita). Responde 200 com status "success", ou 400/500 com a mensagem de
+// erro.
+func (h *GroupWatchHandler) UnwatchAllGroups(w http.ResponseWriter, r *http.Request) {
+	phone := r.URL.Query().Get("phone")
+	if phone == "" {
+		respondWithError(w, http.StatusBadRequest, "Query parameter 'phone' is required")
+		return
+	}
+
+	if err := h.svc.SetWatchedGroups(r.Context(), phone, nil); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to unwatch groups: "+err.Error())
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, map[string]string{
+		"status":  "success",
+		"message": "All watched groups removed successfully",
 	})
 }
 

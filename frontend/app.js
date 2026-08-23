@@ -88,7 +88,7 @@ document.getElementById('clearBtn').addEventListener('click', async () => {
   });
 });
 
-document.getElementById('listVacanciesBtn').addEventListener('click', async () => {
+async function loadVacancies() {
   const el = document.getElementById('listVacanciesResult');
   await handle(el, async () => {
     const data = await api('/api/v1/vacancies');
@@ -96,10 +96,24 @@ document.getElementById('listVacanciesBtn').addEventListener('click', async () =
       renderMsg(el, 'Nenhuma vaga encontrada', 'info');
       return;
     }
-    const rows = data.map((v) => `<tr><td>${escapeHtml(v.index)}</td><td>${escapeHtml(v.text)}</td></tr>`).join('');
-    el.innerHTML = `<table><thead><tr><th>Índice</th><th>Texto</th></tr></thead><tbody>${rows}</tbody></table>`;
+    const rows = data.map((v) => `<tr>
+      <td>${escapeHtml(v.index)}</td>
+      <td>${escapeHtml(v.text)}</td>
+      <td><button class="danger vacancy-delete-btn" data-id="${escapeHtml(v.id)}">Deletar</button></td>
+    </tr>`).join('');
+    el.innerHTML = `<table><thead><tr><th>Índice</th><th>Texto</th><th>Ações</th></tr></thead><tbody>${rows}</tbody></table>`;
+    el.querySelectorAll('.vacancy-delete-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        await handle(el, async () => {
+          await api(`/api/v1/vacancies/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+          await loadVacancies();
+        });
+      });
+    });
   });
-});
+}
+
+document.getElementById('listVacanciesBtn').addEventListener('click', loadVacancies);
 
 // ---------- Match ----------
 document.getElementById('matchForm').addEventListener('submit', async (e) => {
@@ -120,6 +134,35 @@ document.getElementById('matchForm').addEventListener('submit', async (e) => {
     renderJson(el, data);
   });
 });
+
+async function loadMatches() {
+  const el = document.getElementById('matchesListResult');
+  await handle(el, async () => {
+    const data = await api('/api/v1/matches');
+    if (!data || !data.length) {
+      renderMsg(el, 'Nenhum match no histórico', 'info');
+      return;
+    }
+    const rows = data.map((m) => `<tr>
+      <td>${escapeHtml(m.id)}</td>
+      <td>${escapeHtml(new Date(m.created_at).toLocaleString())}</td>
+      <td>${escapeHtml(m.result ? m.result.status : '-')}</td>
+      <td>${escapeHtml(m.result && m.result.matches ? m.result.matches.length : 0)}</td>
+      <td><button class="danger match-delete-btn" data-id="${escapeHtml(m.id)}">Deletar</button></td>
+    </tr>`).join('');
+    el.innerHTML = `<table><thead><tr><th>ID</th><th>Data</th><th>Status</th><th>Matches</th><th>Ações</th></tr></thead><tbody>${rows}</tbody></table>`;
+    el.querySelectorAll('.match-delete-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        await handle(el, async () => {
+          await api(`/api/v1/matches/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+          await loadMatches();
+        });
+      });
+    });
+  });
+}
+
+document.getElementById('matchesListBtn').addEventListener('click', loadMatches);
 
 // ---------- Credenciais ----------
 document.getElementById('credsForm').addEventListener('submit', async (e) => {
@@ -149,6 +192,19 @@ document.getElementById('credsDeleteForm').addEventListener('submit', async (e) 
     const email = document.getElementById('credsDeleteEmail').value;
     const data = await api(`/api/v1/credentials/${encodeURIComponent(email)}`, { method: 'DELETE' });
     renderMsg(el, data.message || 'Credenciais removidas', 'success');
+  });
+});
+
+document.getElementById('credsListBtn').addEventListener('click', async () => {
+  const el = document.getElementById('credsListResult');
+  await handle(el, async () => {
+    const data = await api('/api/v1/credentials');
+    if (!data || !data.length) {
+      renderMsg(el, 'Nenhuma credencial cadastrada', 'info');
+      return;
+    }
+    const rows = data.map((c) => `<tr><td>${escapeHtml(c.email)}</td><td>${escapeHtml(c.provider)}</td></tr>`).join('');
+    el.innerHTML = `<table><thead><tr><th>Email</th><th>Provedor</th></tr></thead><tbody>${rows}</tbody></table>`;
   });
 });
 
@@ -268,6 +324,28 @@ document.getElementById('groupsWatchedBtn').addEventListener('click', async () =
     }
     const rows = watched.map((w) => `<tr><td>${escapeHtml(w.group_name)}</td><td>${escapeHtml(w.group_jid)}</td></tr>`).join('');
     el.innerHTML = `<table><thead><tr><th>Nome</th><th>JID</th></tr></thead><tbody>${rows}</tbody></table>`;
+  });
+});
+
+document.getElementById('groupsUnwatchAllBtn').addEventListener('click', async () => {
+  const el = document.getElementById('groupsList');
+  await handle(el, async () => {
+    const phone = groupsPhone();
+    const data = await api(`/api/v1/whatsapp/groups/watched?phone=${encodeURIComponent(phone)}`, { method: 'DELETE' });
+    renderMsg(el, data.message || 'Grupos desmonitorados com sucesso', 'success');
+  });
+});
+
+document.getElementById('watchedPhonesBtn').addEventListener('click', async () => {
+  const el = document.getElementById('watchedPhonesResult');
+  await handle(el, async () => {
+    const data = await api('/api/v1/whatsapp/groups/watched-phones');
+    if (!data || !data.length) {
+      renderMsg(el, 'Nenhum telefone monitorando grupos', 'info');
+      return;
+    }
+    const rows = data.map((phone) => `<tr><td>${escapeHtml(phone)}</td></tr>`).join('');
+    el.innerHTML = `<table><thead><tr><th>Telefone</th></tr></thead><tbody>${rows}</tbody></table>`;
   });
 });
 

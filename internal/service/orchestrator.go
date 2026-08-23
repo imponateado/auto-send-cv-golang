@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"api/internal/domain"
@@ -23,6 +24,8 @@ type orchestrator struct {
 	credsRepo        domain.CredentialsRepository
 	waManager        domain.WhatsAppManager
 	newEmailService  func(creds *domain.EmailCredentials) domain.EmailService
+	matchesMu        sync.RWMutex
+	matches          map[string]*domain.MatchRecord
 }
 
 func NewOrchestrator(
@@ -41,6 +44,7 @@ func NewOrchestrator(
 		newEmailService: func(creds *domain.EmailCredentials) domain.EmailService {
 			return email.NewOAuthEmailService(creds)
 		},
+		matches: make(map[string]*domain.MatchRecord),
 	}
 }
 
@@ -151,6 +155,59 @@ func (o *orchestrator) ListVacancies(ctx context.Context) ([]domain.Vacancy, err
 		return nil, fmt.Errorf("failed to get placeholder embedding: %w", err)
 	}
 	return o.vectorStore.ListVacancies(ctx, embs[0])
+}
+
+func (o *orchestrator) DeleteVacancy(ctx context.Context, id string) error {
+	return o.vectorStore.DeleteVacancy(ctx, id)
+}
+
+// recordMatch guarda result no histórico em memória, sob um ID novo. Histórico
+// não é persistido em disco — some num restart do servidor (aceito
+// deliberadamente, é só pra consulta durante a sessão).
+func (o *orchestrator) recordMatch(result *domain.ProcessResult) {
+	id := fmt.Sprintf("match_%d", time.Now().UnixNano())
+	o.matchesMu.Lock()
+	o.matches[id] = &domain.MatchRecord{ID: id, CreatedAt: time.Now(), Result: result}
+	o.matchesMu.Unlock()
+}
+
+// ListMatches retorna o histórico de execuções de MatchResume desta sessão do
+// servidor (em memória, perdido num restart).
+func (o *orchestrator) ListMatches(ctx context.Context) ([]*domain.MatchRecord, error) {
+	o.matchesMu.RLock()
+	defer o.matchesMu.RUnlock()
+
+	records := make([]*domain.MatchRecord, 0, len(o.matches))
+	for _, r := range o.matches {
+		records = append(records, r)
+	}
+	return records, nil
+}
+
+// GetMatch busca um MatchRecord do histórico em memória pelo ID. Retorna erro
+// se o ID não existir.
+func (o *orchestrator) GetMatch(ctx context.Context, id string) (*domain.MatchRecord, error) {
+	o.matchesMu.RLock()
+	defer o.matchesMu.RUnlock()
+
+	r, exists := o.matches[id]
+	if !exists {
+		return nil, fmt.Errorf("match %s not found", id)
+	}
+	return r, nil
+}
+
+// DeleteMatch remove um MatchRecord do histórico em memória pelo ID. Retorna
+// erro se o ID não existir.
+func (o *orchestrator) DeleteMatch(ctx context.Context, id string) error {
+	o.matchesMu.Lock()
+	defer o.matchesMu.Unlock()
+
+	if _, exists := o.matches[id]; !exists {
+		return fmt.Errorf("match %s not found", id)
+	}
+	delete(o.matches, id)
+	return nil
 }
 
 func (o *orchestrator) populateItems(ctx context.Context, items []string) (int, error) {
@@ -276,11 +333,13 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 		reason := fmt.Sprintf("Nenhuma vaga compatível com o limite de similaridade semântica (threshold: %.2f).", threshold)
 		log.Printf("[Orchestrator] Fim de fluxo precoce: %s", reason)
 		_ = writeExecutionLog(logFilename, start, 0, 0, nil, nil, reason)
-		return &domain.ProcessResult{
+		result := &domain.ProcessResult{
 			Status:     "success",
 			Matches:    []domain.Match{},
 			DurationMs: time.Since(start).Milliseconds(),
-		}, nil
+		}
+		o.recordMatch(result)
+		return result, nil
 	}
 
 	filteredTexts := make([]string, len(matchedVacancies))
@@ -401,10 +460,12 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 		log.Printf("[Orchestrator] Erro ao gravar arquivo de log %s: %v", logFilename, err)
 	}
 
-	return &domain.ProcessResult{
+	result := &domain.ProcessResult{
 		Status:     "success",
 		Matches:    matchRes.Matches,
 		DurationMs: time.Since(start).Milliseconds(),
-	}, nil
+	}
+	o.recordMatch(result)
+	return result, nil
 }
 

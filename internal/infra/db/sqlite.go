@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"api/internal/domain"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -77,4 +78,23 @@ func (r *sqliteRepo) DeleteEmailCredentials(ctx context.Context, email string) e
 		return fmt.Errorf("failed to delete credentials: %w", err)
 	}
 	return nil
+}
+
+func (r *sqliteRepo) ListEmailCredentials(ctx context.Context) ([]domain.EmailCredentials, error) {
+	query := `SELECT email, provider, refresh_token, client_id, client_secret FROM candidate_credentials;`
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list email credentials: %w", err)
+	}
+	defer rows.Close()
+
+	creds := make([]domain.EmailCredentials, 0)
+	for rows.Next() {
+		var c domain.EmailCredentials
+		if err := rows.Scan(&c.Email, &c.Provider, &c.RefreshToken, &c.ClientID, &c.ClientSecret); err != nil {
+			return nil, fmt.Errorf("failed to scan email credentials: %w", err)
+		}
+		creds = append(creds, c)
+	}
+	return creds, rows.Err()
 }

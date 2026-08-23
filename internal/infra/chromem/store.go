@@ -115,6 +115,7 @@ func (s *chromemStore) SearchSimilarity(ctx context.Context, queryEmbedding []fl
 			matchedVacancies = append(matchedVacancies, domain.Vacancy{
 				Index: origIdx,
 				Text:  res.Content,
+				ID:    res.ID,
 			})
 		}
 	}
@@ -146,7 +147,16 @@ func (s *chromemStore) ListVacancies(ctx context.Context, queryEmbedding []float
 		if _, err := fmt.Sscanf(res.Metadata["index"], "%d", &origIdx); err != nil {
 			origIdx = 0
 		}
-		vacancies = append(vacancies, domain.Vacancy{Index: origIdx, Text: res.Content})
+		vacancies = append(vacancies, domain.Vacancy{Index: origIdx, Text: res.Content, ID: res.ID})
 	}
 	return vacancies, nil
+}
+
+// DeleteVacancy remove uma única vaga do banco vetorial pelo seu ID (o mesmo
+// devolvido em Vacancy.ID por SearchSimilarity/ListVacancies).
+func (s *chromemStore) DeleteVacancy(ctx context.Context, id string) error {
+	if err := s.collection.Delete(ctx, nil, nil, id); err != nil {
+		return fmt.Errorf("failed to delete vacancy %s: %w", id, err)
+	}
+	return nil
 }

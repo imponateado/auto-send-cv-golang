@@ -43,6 +43,7 @@ type mockVectorStore struct {
 	addVacanciesFn     func(ctx context.Context, vacancies []string, embeddings [][]float32) error
 	searchSimilarityFn func(ctx context.Context, queryEmbedding []float32, limit int, threshold float32) ([]domain.Vacancy, error)
 	listVacanciesFn    func(ctx context.Context, queryEmbedding []float32) ([]domain.Vacancy, error)
+	deleteVacancyFn    func(ctx context.Context, id string) error
 }
 
 func (m *mockVectorStore) Clear(ctx context.Context) error {
@@ -81,6 +82,13 @@ func (m *mockVectorStore) ListVacancies(ctx context.Context, queryEmbedding []fl
 		return m.listVacanciesFn(ctx, queryEmbedding)
 	}
 	return nil, nil
+}
+
+func (m *mockVectorStore) DeleteVacancy(ctx context.Context, id string) error {
+	if m.deleteVacancyFn != nil {
+		return m.deleteVacancyFn(ctx, id)
+	}
+	return nil
 }
 
 type mockEmail struct {
@@ -127,6 +135,10 @@ func (m *mockCredsRepo) GetEmailCredentials(ctx context.Context, email string) (
 
 func (m *mockCredsRepo) DeleteEmailCredentials(ctx context.Context, email string) error {
 	return nil
+}
+
+func (m *mockCredsRepo) ListEmailCredentials(ctx context.Context) ([]domain.EmailCredentials, error) {
+	return nil, nil
 }
 
 func TestOrchestrator_Methods(t *testing.T) {
@@ -329,6 +341,68 @@ func TestOrchestrator_Methods(t *testing.T) {
 		}
 		if waCalls != 1 {
 			t.Errorf("expected 1 whatsapp call, got: %d", waCalls)
+		}
+	})
+
+	t.Run("DeleteVacancy delegates to store", func(t *testing.T) {
+		var gotID string
+		mStore := &mockVectorStore{
+			deleteVacancyFn: func(ctx context.Context, id string) error {
+				gotID = id
+				return nil
+			},
+		}
+
+		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, &mockWhatsApp{})
+		if err := orch.DeleteVacancy(context.Background(), "vac_123"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if gotID != "vac_123" {
+			t.Errorf("expected store to receive id 'vac_123', got: %q", gotID)
+		}
+	})
+
+	t.Run("Match history: MatchResume records a match, ListMatches/GetMatch/DeleteMatch operate on it", func(t *testing.T) {
+		mGemini := &mockGemini{
+			matchFn: func(ctx context.Context, fileB64 string, fileMime string, vacancies []string) (*domain.MatchResult, error) {
+				return &domain.MatchResult{Matches: []domain.Match{}}, nil
+			},
+		}
+
+		orch := NewOrchestrator(mGemini, mGemini, &mockVectorStore{}, &mockCredsRepo{}, &mockWhatsApp{})
+
+		res, err := orch.MatchResume(context.Background(), "aGVsbG8=", "application/pdf", "", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		records, err := orch.ListMatches(context.Background())
+		if err != nil {
+			t.Fatalf("unexpected error listing matches: %v", err)
+		}
+		if len(records) != 1 {
+			t.Fatalf("expected 1 recorded match, got: %d", len(records))
+		}
+		id := records[0].ID
+
+		got, err := orch.GetMatch(context.Background(), id)
+		if err != nil {
+			t.Fatalf("unexpected error getting match: %v", err)
+		}
+		if got.Result != res {
+			t.Errorf("expected GetMatch to return the same result recorded by MatchResume")
+		}
+
+		if err := orch.DeleteMatch(context.Background(), id); err != nil {
+			t.Fatalf("unexpected error deleting match: %v", err)
+		}
+
+		if _, err := orch.GetMatch(context.Background(), id); err == nil {
+			t.Error("expected error getting a deleted match")
+		}
+
+		if err := orch.DeleteMatch(context.Background(), "does-not-exist"); err == nil {
+			t.Error("expected error deleting a non-existent match")
 		}
 	})
 

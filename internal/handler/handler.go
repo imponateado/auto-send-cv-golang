@@ -31,9 +31,15 @@ func (rw *responseWriter) WriteHeader(code int) {
 func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler, credsHandler *CredentialsHandler, groupHandler *GroupWatchHandler) http.Handler {
 	mux.HandleFunc("POST /api/v1/vacancies/clear", procHandler.Clear)
 	mux.HandleFunc("GET /api/v1/vacancies", procHandler.List)
+	mux.HandleFunc("DELETE /api/v1/vacancies/{id}", procHandler.DeleteVacancy)
 	mux.HandleFunc("POST /api/v1/match", procHandler.Match)
+	mux.HandleFunc("GET /api/v1/matches", procHandler.ListMatches)
+	mux.HandleFunc("GET /api/v1/matches/{id}", procHandler.GetMatchRecord)
+	mux.HandleFunc("DELETE /api/v1/matches/{id}", procHandler.DeleteMatch)
 
 	mux.HandleFunc("POST /api/v1/credentials", credsHandler.RegisterCredentials)
+	mux.HandleFunc("GET /api/v1/credentials", credsHandler.ListCredentials)
+	mux.HandleFunc("GET /api/v1/credentials/{email}", credsHandler.GetCredentials)
 	mux.HandleFunc("DELETE /api/v1/credentials/{email}", credsHandler.DeleteCredentials)
 	mux.HandleFunc("GET /api/v1/whatsapp/connections", credsHandler.ListWhatsAppConnections)
 	mux.HandleFunc("GET /api/v1/whatsapp/qr", credsHandler.GetWhatsAppQR)
@@ -43,6 +49,8 @@ func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler, credsHand
 	mux.HandleFunc("GET /api/v1/whatsapp/groups", groupHandler.ListGroups)
 	mux.HandleFunc("GET /api/v1/whatsapp/groups/watched", groupHandler.GetWatchedGroups)
 	mux.HandleFunc("PUT /api/v1/whatsapp/groups/watched", groupHandler.SetWatchedGroups)
+	mux.HandleFunc("DELETE /api/v1/whatsapp/groups/watched", groupHandler.UnwatchAllGroups)
+	mux.HandleFunc("GET /api/v1/whatsapp/groups/watched-phones", groupHandler.ListWatchedPhones)
 	mux.HandleFunc("POST /api/v1/whatsapp/groups/flush", groupHandler.FlushNow)
 	mux.HandleFunc("GET /api/v1/whatsapp/groups/status", groupHandler.Status)
 
