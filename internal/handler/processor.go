@@ -21,14 +21,14 @@ func NewProcessorHandler(orchestrator domain.Orchestrator) *ProcessorHandler {
 	}
 }
 
-// Clear apaga todas as vagas do banco vetorial local via h.orchestrator. Responde
+// Clear apaga todas as vagas do banco de vagas local via h.orchestrator. Responde
 // 200 com status "success", ou 500 com a mensagem de erro.
-// @Summary Limpa o banco de dados vetorial de vagas
-// @Description Apaga todas as vagas do banco vetorial local (chromem-go) e responde com o status da operação.
+// @Summary Limpa o banco de vagas
+// @Description Apaga todas as vagas do banco de vagas local (SQLite) e responde com o status da operação.
 // @Tags Vagas
 // @Produce json
-// @Success 200 {object} map[string]string "Banco vetorial de vagas limpo com sucesso"
-// @Failure 500 {object} domain.ErrorResponse "Erro interno ao limpar banco vetorial"
+// @Success 200 {object} map[string]string "Banco de vagas limpo com sucesso"
+// @Failure 500 {object} domain.ErrorResponse "Erro interno ao limpar o banco de vagas"
 // @Router /api/v1/vacancies/clear [post]
 func (h *ProcessorHandler) Clear(w http.ResponseWriter, r *http.Request) {
 	err := h.orchestrator.ClearVacancies(r.Context())
@@ -43,11 +43,11 @@ func (h *ProcessorHandler) Clear(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// List retorna todas as vagas atualmente armazenadas no banco vetorial local via
+// List retorna todas as vagas atualmente armazenadas no banco de vagas local via
 // h.orchestrator. Responde 200 com a lista de domain.Vacancy, ou 500 com a
 // mensagem de erro.
-// @Summary Lista todas as vagas do banco vetorial
-// @Description Retorna todas as vagas atualmente armazenadas no banco vetorial local (chromem-go).
+// @Summary Lista todas as vagas
+// @Description Retorna todas as vagas atualmente armazenadas no banco de vagas local (SQLite).
 // @Tags Vagas
 // @Produce json
 // @Success 200 {array} domain.Vacancy "Lista de vagas"
@@ -63,11 +63,11 @@ func (h *ProcessorHandler) List(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, http.StatusOK, vacancies)
 }
 
-// DeleteVacancy remove uma vaga específica do banco vetorial local via
+// DeleteVacancy remove uma vaga específica do banco de vagas local via
 // h.orchestrator, identificada pelo parâmetro de rota {id}. Responde 200 com
 // status "success", ou 400/500 com a mensagem de erro.
-// @Summary Remove uma vaga específica do banco vetorial
-// @Description Remove a vaga identificada pelo ID (retornado em cada item da listagem) do banco vetorial local (chromem-go).
+// @Summary Remove uma vaga específica
+// @Description Remove a vaga identificada pelo ID (retornado em cada item da listagem) do banco de vagas local (SQLite).
 // @Tags Vagas
 // @Produce json
 // @Param id path string true "ID da vaga"
@@ -108,7 +108,7 @@ type matchRequest struct {
 // @Accept json
 // @Produce json
 // @Param request body matchRequest true "Payload contendo o currículo base64 e dados do candidato"
-// @Success 200 {object} domain.ProcessResult "Resultado da busca vetorial e envios automáticos"
+// @Success 200 {object} domain.ProcessResult "Resultado da busca por similaridade e envios automáticos"
 // @Failure 400 {object} domain.ErrorResponse "Requisição inválida"
 // @Failure 500 {object} domain.ErrorResponse "Erro ao extrair, buscar ou enviar candidaturas"
 // @Router /api/v1/match [post]

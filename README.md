@@ -1,16 +1,31 @@
-# API Go de Processamento de Texto e Documentos
+# API Go de Match Automático de Vagas
 
-Uma API REST desenvolvida em Go projetada com **Clean Architecture (Arquitetura Limpa)**. Esta API foi construída para receber um payload JSON contendo um texto grande não formatado e/ou o Base64 de um documento (PDF, DOCX, ODT, etc.), calculando estatísticas textuais e identificando metadados do arquivo decodificado.
+Uma API REST em Go, com **Clean Architecture**, que monitora grupos de WhatsApp em busca de vagas de emprego, indexa cada mensagem como uma vaga e faz o match automático contra o currículo de um candidato — disparando a candidatura por e-mail ou WhatsApp quando uma LLM confirma a compatibilidade.
+
+## Como funciona
+
+1. Um watcher escuta os grupos de WhatsApp monitorados e acumula as mensagens em memória.
+2. Após 10 minutos de silêncio no grupo, o lote inteiro é processado: cada mensagem vira uma vaga, com embedding gerado localmente pelo Ollama.
+3. No `POST /api/v1/match`, o currículo é vetorizado e comparado por similaridade de cosseno contra as vagas do dia.
+4. As vagas que passam do threshold vão para uma LLM (Gemini ou DeepSeek), que confirma os matches e extrai o canal de contato.
+5. Para cada match confirmado, a candidatura é disparada com o currículo em anexo.
+
+As vagas são descartadas no primeiro flush de cada novo dia.
 
 ## Arquitetura
 
-O projeto segue uma estrutura de camadas limpa:
-- **`cmd/server/`**: Ponto de entrada da aplicação. Configura o servidor HTTP com timeouts apropriados e desligamento gracioso (graceful shutdown).
-- **`internal/config/`**: Gerenciamento de configurações por variáveis de ambiente. Carrega automaticamente arquivos `.env` locais em ambiente de desenvolvimento sem dependências externas.
-- **`internal/domain/`**: Definições das entidades de negócio e interfaces (contratos) como `ProcessRequest`, `ProcessResult` e `FileMetadata`.
-- **`internal/service/`**: Lógica de negócio (cálculo de bytes, contagem de itens, decodificação Base64 e detecção automática de MIME type).
-- **`internal/handler/`**: Controladores HTTP (validação de JSON, validação condicional dos campos obrigatórios), middlewares globais (logging estruturado e recuperação de pânicos).
-- **`internal/infra/`**: Implementações reais de infraestrutura de baixo nível para e-mail (SMTP) e WhatsApp (Meta Cloud API).
+- **`cmd/server/`**: Ponto de entrada. Configura o servidor HTTP com timeouts e desligamento gracioso.
+- **`internal/config/`**: Configuração por variáveis de ambiente, com carregamento de `.env` sem dependências externas.
+- **`internal/domain/`**: Entidades e contratos — `Vacancy`, `Match`, `Orchestrator`, `VectorStore`, `GroupWatchRepository`.
+- **`internal/service/`**: Regra de negócio — o `orchestrator` (indexação e match) e o `GroupWatcher` (buffer e debounce das mensagens de grupo).
+- **`internal/handler/`**: Controladores HTTP, middlewares de logging, recuperação de pânico e CORS.
+- **`internal/infra/`**: Implementações concretas — SQLite (credenciais, grupos, mensagens e vagas), whatsmeow (sessão do WhatsApp), Gemini/DeepSeek (LLM), Ollama (embeddings), OAuth2 (Gmail e Microsoft Graph) e extração de texto de PDF.
+
+### Armazenamento
+
+Tudo vive em SQLite, em dois arquivos: `./db/api.db` (credenciais, grupos monitorados, arquivo de mensagens e vagas com seus embeddings) e `./db/whatsapp.db` (sessão do whatsmeow).
+
+Os embeddings ficam como `BLOB` e a busca por similaridade é força bruta em Go — varredura linear com cosseno sobre todas as vagas. Para a escala do projeto (centenas de vagas, limpas diariamente) isso custa milissegundos, e dispensa um banco vetorial dedicado.
 
 ## Como Executar a Aplicação
 
@@ -47,8 +62,8 @@ A API expõe os seguintes endpoints sob `/api/v1`:
 
 | Método | Rota | Descrição |
 |---|---|---|
-| POST | `/api/v1/vacancies/clear` | Limpa o banco vetorial de vagas |
-| GET | `/api/v1/vacancies` | Lista todas as vagas atualmente no banco vetorial |
+| POST | `/api/v1/vacancies/clear` | Limpa a tabela de vagas |
+| GET | `/api/v1/vacancies` | Lista todas as vagas atualmente armazenadas |
 | DELETE | `/api/v1/vacancies/{id}` | Remove uma vaga específica pelo seu ID |
 | POST | `/api/v1/match` | Faz o match de um currículo contra as vagas cadastradas |
 | GET | `/api/v1/matches` | Lista o histórico de execuções de match (em memória) |
@@ -93,7 +108,7 @@ A API expõe os seguintes endpoints sob `/api/v1`:
 
 ### Fluxo Típico
 
-**1. Conferir as vagas já indexadas no banco vetorial:**
+**1. Conferir as vagas já indexadas:**
 ```bash
 curl http://localhost:8080/api/v1/vacancies
 ```

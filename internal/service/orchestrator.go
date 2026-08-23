@@ -120,18 +120,10 @@ func (o *orchestrator) PopulateVacancyTexts(ctx context.Context, texts []string)
 	return o.populateItems(ctx, texts)
 }
 
-// ListVacancies retorna todas as vagas atualmente armazenadas no banco vetorial
-// local. Retorna erro se a geração do embedding de referência ou a consulta ao
-// banco vetorial falhar.
+// ListVacancies retorna todas as vagas atualmente armazenadas. Retorna erro se a
+// consulta ao banco falhar.
 func (o *orchestrator) ListVacancies(ctx context.Context) ([]domain.Vacancy, error) {
-	embs, err := o.embeddingService.GetEmbeddings(ctx, []string{"."})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get placeholder embedding: %w", err)
-	}
-	if len(embs) == 0 {
-		return nil, fmt.Errorf("embedding service returned no placeholder embedding")
-	}
-	return o.vectorStore.ListVacancies(ctx, embs[0])
+	return o.vectorStore.ListVacancies(ctx)
 }
 
 func (o *orchestrator) DeleteVacancy(ctx context.Context, id string) error {
@@ -192,23 +184,25 @@ func (o *orchestrator) populateItems(ctx context.Context, items []string) (int, 
 		return 0, nil
 	}
 
-	var newItems []string
+	hashes := make([]string, 0, len(items))
+	candidates := make([]string, 0, len(items))
 	for _, item := range items {
 		trimmed := strings.TrimSpace(item)
 		if trimmed == "" {
 			continue
 		}
-		hash := sha256.Sum256([]byte(trimmed))
-		hashStr := fmt.Sprintf("vac_%x", hash)
+		hashes = append(hashes, fmt.Sprintf("vac_%x", sha256.Sum256([]byte(trimmed))))
+		candidates = append(candidates, item)
+	}
 
-		exists, err := o.vectorStore.HasVacancy(ctx, hashStr)
-		if err != nil {
-			log.Printf("[Orchestrator] Erro ao verificar existência da vaga: %v", err)
-			newItems = append(newItems, item)
-			continue
-		}
+	existing, err := o.vectorStore.ExistingVacancyIDs(ctx, hashes)
+	if err != nil {
+		return 0, fmt.Errorf("failed to check existing vacancies: %w", err)
+	}
 
-		if !exists {
+	var newItems []string
+	for i, item := range candidates {
+		if !existing[hashes[i]] {
 			newItems = append(newItems, item)
 		}
 	}

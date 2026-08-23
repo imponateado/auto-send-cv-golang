@@ -13,7 +13,6 @@ import (
 	"api/internal/config"
 	"api/internal/domain"
 	"api/internal/handler"
-	"api/internal/infra/chromem"
 	"api/internal/infra/db"
 	"api/internal/infra/deepseek"
 	"api/internal/infra/gemini"
@@ -70,9 +69,9 @@ func main() {
 	ollamaModel := os.Getenv("OLLAMA_MODEL")
 	ollamaService := ollama.NewOllamaClient(ollamaURL, ollamaModel)
 
-	vectorStore, err := chromem.NewChromemStore("./db")
+	vectorStore, err := db.NewVacancyStore(sqlDB)
 	if err != nil {
-		log.Fatalf("Failed to initialize chromem vector store: %v", err)
+		log.Fatalf("Failed to initialize vacancy store: %v", err)
 	}
 
 	var activeLLM domain.GeminiService

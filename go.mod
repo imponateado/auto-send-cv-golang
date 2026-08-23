@@ -4,7 +4,6 @@ go 1.26.4
 
 require (
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
-	github.com/philippgille/chromem-go v0.7.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/swaggo/http-swagger v1.3.4
 	github.com/swaggo/swag v1.16.6

@@ -39,10 +39,10 @@ func (m *mockGemini) ExtractText(ctx context.Context, fileB64 string, fileMime s
 
 type mockVectorStore struct {
 	clearFn            func(ctx context.Context) error
-	hasVacancyFn       func(ctx context.Context, id string) (bool, error)
+	existingIDsFn      func(ctx context.Context, ids []string) (map[string]bool, error)
 	addVacanciesFn     func(ctx context.Context, vacancies []string, embeddings [][]float32) error
 	searchSimilarityFn func(ctx context.Context, queryEmbedding []float32, limit int, threshold float32) ([]domain.Vacancy, error)
-	listVacanciesFn    func(ctx context.Context, queryEmbedding []float32) ([]domain.Vacancy, error)
+	listVacanciesFn    func(ctx context.Context) ([]domain.Vacancy, error)
 	deleteVacancyFn    func(ctx context.Context, id string) error
 }
 
@@ -53,11 +53,11 @@ func (m *mockVectorStore) Clear(ctx context.Context) error {
 	return nil
 }
 
-func (m *mockVectorStore) HasVacancy(ctx context.Context, id string) (bool, error) {
-	if m.hasVacancyFn != nil {
-		return m.hasVacancyFn(ctx, id)
+func (m *mockVectorStore) ExistingVacancyIDs(ctx context.Context, ids []string) (map[string]bool, error) {
+	if m.existingIDsFn != nil {
+		return m.existingIDsFn(ctx, ids)
 	}
-	return false, nil
+	return map[string]bool{}, nil
 }
 
 func (m *mockVectorStore) AddVacancies(ctx context.Context, vacancies []string, embeddings [][]float32) error {
@@ -77,9 +77,9 @@ func (m *mockVectorStore) SearchSimilarity(ctx context.Context, queryEmbedding [
 	}, nil
 }
 
-func (m *mockVectorStore) ListVacancies(ctx context.Context, queryEmbedding []float32) ([]domain.Vacancy, error) {
+func (m *mockVectorStore) ListVacancies(ctx context.Context) ([]domain.Vacancy, error) {
 	if m.listVacanciesFn != nil {
-		return m.listVacanciesFn(ctx, queryEmbedding)
+		return m.listVacanciesFn(ctx)
 	}
 	return nil, nil
 }
@@ -189,13 +189,12 @@ func TestOrchestrator_Methods(t *testing.T) {
 	t.Run("PopulateVacancyTexts skips existing vacancies", func(t *testing.T) {
 		addCalled := false
 		mStore := &mockVectorStore{
-			hasVacancyFn: func(ctx context.Context, id string) (bool, error) {
-				expectedHash := sha256.Sum256([]byte("vaga 1"))
-				expectedID := fmt.Sprintf("vac_%x", expectedHash)
-				if id == expectedID {
-					return true, nil
+			existingIDsFn: func(ctx context.Context, ids []string) (map[string]bool, error) {
+				if len(ids) != 2 {
+					t.Errorf("esperava os 2 hashes numa consulta só, got: %v", ids)
 				}
-				return false, nil
+				existingID := fmt.Sprintf("vac_%x", sha256.Sum256([]byte("vaga 1")))
+				return map[string]bool{existingID: true}, nil
 			},
 			addVacanciesFn: func(ctx context.Context, vacancies []string, embeddings [][]float32) error {
 				addCalled = true
@@ -219,21 +218,18 @@ func TestOrchestrator_Methods(t *testing.T) {
 		}
 	})
 
-	t.Run("ListVacancies gets a placeholder embedding and delegates to store", func(t *testing.T) {
+	// Listar vagas não pode depender do serviço de embeddings: com o SQLite é um
+	// SELECT, e GET /api/v1/vacancies precisa responder com o Ollama fora do ar.
+	t.Run("ListVacancies delegates to the store without touching the embedding service", func(t *testing.T) {
 		wantVacancies := []domain.Vacancy{{Index: 0, Text: "vaga 1"}, {Index: 1, Text: "vaga 2"}}
 		mGemini := &mockGemini{
 			embedFn: func(ctx context.Context, texts []string) ([][]float32, error) {
-				if len(texts) != 1 {
-					t.Errorf("expected exactly 1 placeholder text, got: %v", texts)
-				}
-				return [][]float32{{0.1, 0.2, 0.3}}, nil
+				t.Error("ListVacancies não pode chamar o serviço de embeddings")
+				return nil, fmt.Errorf("embedding service unavailable")
 			},
 		}
 		mStore := &mockVectorStore{
-			listVacanciesFn: func(ctx context.Context, queryEmbedding []float32) ([]domain.Vacancy, error) {
-				if len(queryEmbedding) != 3 {
-					t.Errorf("expected placeholder embedding to be forwarded, got: %v", queryEmbedding)
-				}
+			listVacanciesFn: func(ctx context.Context) ([]domain.Vacancy, error) {
 				return wantVacancies, nil
 			},
 		}
@@ -245,44 +241,6 @@ func TestOrchestrator_Methods(t *testing.T) {
 		}
 		if len(got) != len(wantVacancies) {
 			t.Errorf("expected %d vacancies, got: %d", len(wantVacancies), len(got))
-		}
-	})
-
-	t.Run("ListVacancies propagates embedding errors without calling the store", func(t *testing.T) {
-		storeCalled := false
-		mGemini := &mockGemini{
-			embedFn: func(ctx context.Context, texts []string) ([][]float32, error) {
-				return nil, fmt.Errorf("embedding service unavailable")
-			},
-		}
-		mStore := &mockVectorStore{
-			listVacanciesFn: func(ctx context.Context, queryEmbedding []float32) ([]domain.Vacancy, error) {
-				storeCalled = true
-				return nil, nil
-			},
-		}
-
-		orch := NewOrchestrator(&mockGemini{}, mGemini, mStore, &mockCredsRepo{}, &mockWhatsApp{})
-		_, err := orch.ListVacancies(context.Background())
-		if err == nil {
-			t.Fatal("expected error when embedding fails")
-		}
-		if storeCalled {
-			t.Error("expected vectorStore.ListVacancies not to be called when embedding fails")
-		}
-	})
-
-	t.Run("ListVacancies treats an empty embedding slice as an error", func(t *testing.T) {
-		mGemini := &mockGemini{
-			embedFn: func(ctx context.Context, texts []string) ([][]float32, error) {
-				return [][]float32{}, nil
-			},
-		}
-
-		orch := NewOrchestrator(&mockGemini{}, mGemini, &mockVectorStore{}, &mockCredsRepo{}, &mockWhatsApp{})
-		_, err := orch.ListVacancies(context.Background())
-		if err == nil {
-			t.Fatal("expected error when embedding service returns an empty slice")
 		}
 	})
 
