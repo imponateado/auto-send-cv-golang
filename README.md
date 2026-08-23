@@ -43,16 +43,52 @@ go test -v ./...
 
 A API expõe os seguintes endpoints sob `/api/v1`:
 
+**Vagas e match:**
+
 | Método | Rota | Descrição |
 |---|---|---|
 | POST | `/api/v1/vacancies/clear` | Limpa o banco vetorial de vagas |
 | GET | `/api/v1/vacancies` | Lista todas as vagas atualmente no banco vetorial |
+| DELETE | `/api/v1/vacancies/{id}` | Remove uma vaga específica pelo seu ID |
 | POST | `/api/v1/match` | Faz o match de um currículo contra as vagas cadastradas |
+| GET | `/api/v1/matches` | Lista o histórico de execuções de match (em memória) |
+| GET | `/api/v1/matches/{id}` | Consulta um item do histórico de matches |
+| DELETE | `/api/v1/matches/{id}` | Remove um item do histórico de matches |
+
+**Credenciais de e-mail:**
+
+| Método | Rota | Descrição |
+|---|---|---|
 | POST | `/api/v1/credentials` | Registra credenciais OAuth2 (Google/Microsoft) de um candidato para envio de e-mail |
+| GET | `/api/v1/credentials` | Lista os candidatos com credenciais cadastradas (sem expor os segredos) |
+| GET | `/api/v1/credentials/{email}` | Consulta as credenciais de um candidato (sem expor os segredos) |
 | DELETE | `/api/v1/credentials/{email}` | Remove as credenciais de um candidato |
+
+**Sessão do WhatsApp:**
+
+| Método | Rota | Descrição |
+|---|---|---|
 | GET | `/api/v1/whatsapp/qr?phone=...` | Gera o QR Code para autenticação do WhatsApp (PNG) |
 | GET | `/api/v1/whatsapp/status?phone=...` | Consulta o status da sessão do WhatsApp |
+| GET | `/api/v1/whatsapp/connections` | Lista todo número que já completou o pareamento |
 | POST | `/api/v1/whatsapp/disconnect?phone=...` | Desconecta a sessão do WhatsApp |
+
+**Monitoramento de grupos:**
+
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/v1/whatsapp/groups?phone=...` | Lista os grupos de que o número é membro |
+| GET | `/api/v1/whatsapp/groups/watched?phone=...` | Lista os grupos atualmente monitorados |
+| PUT | `/api/v1/whatsapp/groups/watched?phone=...` | Substitui o conjunto de grupos monitorados |
+| DELETE | `/api/v1/whatsapp/groups/watched?phone=...` | Para de monitorar todos os grupos do número |
+| GET | `/api/v1/whatsapp/groups/watched-phones` | Lista os números com pelo menos um grupo monitorado |
+| POST | `/api/v1/whatsapp/groups/flush` | Processa imediatamente o buffer de mensagens pendentes |
+| GET | `/api/v1/whatsapp/groups/status` | Contagem de pendências e resultado do último flush |
+
+**Outros:**
+
+| Método | Rota | Descrição |
+|---|---|---|
 | GET | `/swagger/` | Documentação interativa (Swagger UI) |
 
 ### Fluxo Típico
@@ -81,16 +117,16 @@ curl -X POST http://localhost:8080/api/v1/match \
 Retorno esperado (JSON):
 ```json
 {
-  "bytes_processed": 9,
-  "items_processed": 1,
-  "items": ["..."],
-  "file": {
-    "size_in_bytes": 9,
-    "mime_type": "application/pdf",
-    "status": "decoded"
-  },
-  "matches": [],
-  "duration_ms": 0,
+  "matches": [
+    {
+      "index": 0,
+      "vacancy_id": "vac_3f2a...",
+      "reason": "Candidato tem experiência em Go e Clean Architecture",
+      "contact_type": "email",
+      "contact_target": "rh@empresa.com"
+    }
+  ],
+  "duration_ms": 4210,
   "status": "success"
 }
 ```
@@ -129,23 +165,20 @@ Usa a biblioteca [whatsmeow](https://github.com/tulir/whatsmeow) para manter uma
 
 ---
 
-## Frontend (Flutter)
+## Frontend
 
-O diretório [`frontend/`](frontend/) contém um app Flutter (Web e Android) que consome esta API — é um projeto separado, não embutido no binário do Go. Como roda em origem/app diferente da API, o backend já expõe CORS liberado (`internal/handler/handler.go`) para viabilizar as chamadas.
+O diretório [`frontend/`](frontend/) contém um cliente web estático — `index.html`, `styles.css` e `app.js`, sem framework, sem build step e sem dependências. Não é embutido no binário do Go; é servido separadamente. Como roda em outra origem, o backend já expõe CORS liberado (`internal/handler/handler.go`) para viabilizar as chamadas.
 
-Cobre os 4 fluxos principais em abas: Vagas (clear/populate + acompanhamento da tarefa assíncrona), Match de currículo (upload de PDF), Credenciais de e-mail (OAuth2) e WhatsApp (QR code, status, desconexão).
+Cobre os fluxos principais em abas: Vagas (limpar, listar, remover), Match de currículo (upload de PDF), Credenciais de e-mail (OAuth2), WhatsApp (QR code, status, desconexão) e Grupos monitorados (seleção, flush manual, status do buffer).
 
-### Rodando em desenvolvimento
+### Rodando
+Abrir o `frontend/index.html` direto no navegador funciona, mas o caminho recomendado é servir por HTTP, para evitar as restrições de `file://`:
+
 ```bash
 cd frontend
-flutter run -d chrome --dart-define=API_BASE=http://localhost:8080   # Web
-flutter run -d android --dart-define=API_BASE=http://<ip-da-api>:8080  # Android (emulador/device)
+python3 -m http.server 3000
 ```
-`API_BASE` aponta para onde a API Go está rodando (default: `http://localhost:8080`). Em um device Android físico, use o IP da máquina na rede local, não `localhost`.
 
-### Gerando os builds finais
-```bash
-cd frontend
-flutter build web                                    # gera frontend/build/web
-flutter build apk --dart-define=API_BASE=http://<ip-da-api>:8080   # gera o .apk em frontend/build/app/outputs/flutter-apk
-```
+Depois acesse `http://localhost:3000`.
+
+O endereço da API é configurável **na própria página**, no campo no topo — não há variável de build. O valor fica salvo no `localStorage` do navegador e o default é `http://localhost:8080`. Para acessar de outro dispositivo na rede local, troque por `http://<ip-da-maquina>:8080`.

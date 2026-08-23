@@ -4,7 +4,9 @@
 *.dll
 *.so
 *.dylib
-main
+# Binário compilado na raiz (go build -o main). Ancorado com "/" para não
+# ignorar um eventual diretório chamado "main" mais abaixo na árvore.
+/main
 
 # Test binary, built with `go test -c`
 *.test
