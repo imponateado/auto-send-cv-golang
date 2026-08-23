@@ -170,12 +170,13 @@ func (c *geminiClient) MatchResume(ctx context.Context, fileB64 string, fileMime
 		return nil, fmt.Errorf("failed to marshal gemini request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/models/%s:generateContent?key=%s", c.apiURL, c.model, c.apiKey)
+	url := fmt.Sprintf("%s/models/%s:generateContent", c.apiURL, c.model)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create http request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", c.apiKey)
 
 	log.Printf("[GeminiClient] Sending POST request to %s (payload size: %d bytes)...", url, len(jsonBytes))
 	startHttp := time.Now()

@@ -21,8 +21,8 @@ func TestGeminiClient_MatchResume(t *testing.T) {
 		vacancies := []string{"Vaga Go", "Vaga Python"}
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if key := r.URL.Query().Get("key"); key != apiKey {
-				t.Errorf("expected key query param %s, got: %s", apiKey, key)
+			if key := r.Header.Get("x-goog-api-key"); key != apiKey {
+				t.Errorf("expected x-goog-api-key header %s, got: %s", apiKey, key)
 			}
 
 			w.WriteHeader(http.StatusOK)
