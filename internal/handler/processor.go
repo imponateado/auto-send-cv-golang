@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"api/internal/domain"
 )
@@ -128,7 +130,13 @@ func (h *ProcessorHandler) Match(w http.ResponseWriter, r *http.Request) {
 	}
 	base64Data = strings.Join(strings.Fields(base64Data), "")
 
-	res, err := h.orchestrator.MatchResume(r.Context(), base64Data, "application/pdf", req.CandidateEmail, req.CandidatePhone)
+	// Disparo de candidatura é efeito colateral externo: uma vez começado, não
+	// pode morrer no meio porque o cliente HTTP desistiu. WithoutCancel mantém os
+	// valores do contexto e descarta só o cancelamento.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
+	defer cancel()
+
+	res, err := h.orchestrator.MatchResume(ctx, base64Data, "application/pdf", req.CandidateEmail, req.CandidatePhone)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to match resume: "+err.Error())
 		return
