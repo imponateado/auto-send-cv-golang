@@ -270,8 +270,12 @@ func (m *WhatsMeowManager) WatchGroups(ctx context.Context, phone string, watche
 	m.groupHandlersMu.Lock()
 	defer m.groupHandlersMu.Unlock()
 
+	// Síncrono de propósito: assíncrono deixaria uma janela com o handler antigo e
+	// o novo ativos ao mesmo tempo. RemoveEventHandler pega o lock de escrita que
+	// dispatchEvent segura para leitura, então só travaria se WatchGroups fosse
+	// chamado de dentro de um handler — e não é (só vem do HTTP e do Bootstrap).
 	if oldID, exists := m.groupHandlers[phone]; exists {
-		go cli.RemoveEventHandler(oldID)
+		cli.RemoveEventHandler(oldID)
 	}
 
 	id := cli.AddEventHandler(func(evt any) {
@@ -452,9 +456,12 @@ func (m *WhatsMeowManager) SendDocument(ctx context.Context, phoneSender string,
 			FileEncSHA256: uploaded.FileEncSHA256,
 			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uploaded.FileLength),
-			Mimetype:      proto.String("application/pdf"),
-			FileName:      proto.String(filename),
-			Caption:       proto.String(caption),
+			// ponytail: o único chamador (orchestrator) sempre envia currículo em
+			// PDF. Upgrade path: receber o mime como parâmetro se entrar outro
+			// formato.
+			Mimetype: proto.String("application/pdf"),
+			FileName: proto.String(filename),
+			Caption:  proto.String(caption),
 		},
 	}
 

@@ -31,8 +31,8 @@ type GroupWatchRepository interface {
 	ListAllWatchedPhones(ctx context.Context) ([]string, error)
 	SetWatchedGroups(ctx context.Context, phone string, groups []GroupInfo) error
 
-	BufferMessage(ctx context.Context, msg BufferedMessage) error
-	PendingMessages(ctx context.Context) ([]BufferedMessage, error)
-	MarkProcessed(ctx context.Context, phone string, messageIDs []string) error
-	CountPending(ctx context.Context) (int, error)
+	// ArchiveMessages grava as mensagens que já viraram vaga. É registro
+	// histórico de proveniência (quem postou, em qual grupo, quando), não fila de
+	// trabalho — o buffer de trabalho vive em memória no GroupWatcher.
+	ArchiveMessages(ctx context.Context, msgs []BufferedMessage) error
 }

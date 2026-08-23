@@ -28,12 +28,26 @@ type GroupWatcher struct {
 	debounceMu    sync.Mutex
 	debounceTimer *time.Timer
 
+	// ponytail: o buffer de mensagens vive só em memória entre o recebimento e o
+	// flush. Um restart dentro da janela de debounce descarta a rajada inteira —
+	// aceito deliberadamente em troca de não escrever no disco a cada mensagem (e
+	// de tirar I/O do caminho de despacho de eventos do whatsmeow). Upgrade path:
+	// voltar a persistir na chegada, com uma goroutine escritora separada para
+	// não bloquear o handler.
+	pendingMu sync.Mutex
+	pending   []domain.BufferedMessage
+
 	statusMu  sync.RWMutex
 	lastRun   time.Time
 	lastCount int
 	lastError string
 
 	flushMu sync.Mutex
+	// ponytail: lastFlushDay só vive em memória, então um restart entre dois
+	// flushes do mesmo dia faz o próximo flush limpar as vagas sem precisar.
+	// Com uma rajada diária isso é inofensivo. Upgrade path: derivar de
+	// MAX(processed_at) do group_message_buffer.
+	lastFlushDay time.Time
 }
 
 func NewGroupWatcher(repo domain.GroupWatchRepository, waManager *whatsapp.WhatsMeowManager, orchestrator domain.Orchestrator) *GroupWatcher {
@@ -72,10 +86,31 @@ func (s *GroupWatcher) SetWatchedGroups(ctx context.Context, phone string, group
 	return s.waManager.WatchGroups(ctx, phone, jids, s.onMessage)
 }
 
-// onMessage grave msg no buffer de persistência e reinicia o debounce do flush automático. Não retorna nada ao chamador; erros de persistência só são logados.
+// onMessage acumula msg no buffer em memória e reinicia o debounce do flush.
+// Não persiste nada: o disco só é tocado no flush. Roda dentro do handler de
+// eventos do whatsmeow, então precisa ser barato. Mensagem repetida é ignorada
+// e não adia o flush.
 func (s *GroupWatcher) onMessage(_ string, msg domain.BufferedMessage) {
-	if err := s.repo.BufferMessage(context.Background(), msg); err != nil {
-		log.Printf("[GroupWatcher] failed to buffer message: %v", err)
+	s.pendingMu.Lock()
+	// ponytail: varredura linear no lugar do INSERT OR IGNORE na PK
+	// (phone, message_id) que deduplicava reentrega do mesmo evento. É O(n) por
+	// mensagem, com n limitado ao tamanho da rajada (~200). Upgrade path: um
+	// map[string]struct{} limpo junto com o slice, se as rajadas crescerem
+	// ordens de grandeza.
+	duplicate := false
+	for _, m := range s.pending {
+		if m.Phone == msg.Phone && m.MessageID == msg.MessageID {
+			duplicate = true
+			break
+		}
+	}
+	if !duplicate {
+		s.pending = append(s.pending, msg)
+	}
+	s.pendingMu.Unlock()
+
+	if duplicate {
+		return
 	}
 	s.resetDebounce()
 }
@@ -94,18 +129,18 @@ func (s *GroupWatcher) resetDebounce() {
 	})
 }
 
-// FlushNow drena as mensagens pendentes do buffer através do orchestrator, num
-// único lote de embeddings. Retorna a quantidade de mensagens processadas e um
-// erro se a leitura, o processamento ou a marcação como processada falhar.
+// FlushNow processa o buffer em memória: popula o banco vetorial e só então
+// arquiva as mensagens no SQLite. Se o processamento falhar, as mensagens
+// continuam no buffer para a próxima tentativa. Retorna quantas vagas foram
+// salvas e o erro que interrompeu a rodada.
 func (s *GroupWatcher) FlushNow(ctx context.Context) (int, error) {
 	s.flushMu.Lock()
 	defer s.flushMu.Unlock()
 
-	msgs, err := s.repo.PendingMessages(ctx)
-	if err != nil {
-		s.recordRun(0, err)
-		return 0, err
-	}
+	s.pendingMu.Lock()
+	msgs := make([]domain.BufferedMessage, len(s.pending))
+	copy(msgs, s.pending)
+	s.pendingMu.Unlock()
 
 	if len(msgs) == 0 {
 		s.recordRun(0, nil)
@@ -113,24 +148,37 @@ func (s *GroupWatcher) FlushNow(ctx context.Context) (int, error) {
 	}
 
 	texts := make([]string, len(msgs))
-	idsByPhone := make(map[string][]string)
 	for i, msg := range msgs {
 		texts[i] = msg.Text
-		idsByPhone[msg.Phone] = append(idsByPhone[msg.Phone], msg.MessageID)
 	}
 
+	// Vagas valem por um dia: o primeiro flush de cada dia começa do zero.
+	if now := time.Now(); !sameDay(s.lastFlushDay, now) {
+		if err := s.orchestrator.ClearVacancies(ctx); err != nil {
+			s.recordRun(0, err)
+			return 0, fmt.Errorf("failed to clear previous day vacancies: %w", err)
+		}
+		s.lastFlushDay = now
+	}
+
+	// Popula primeiro: se falhar, as mensagens seguem no buffer para retry.
 	count, err := s.orchestrator.PopulateVacancyTexts(ctx, texts)
 	if err != nil {
 		s.recordRun(count, err)
 		return count, err
 	}
 
-	for phone, ids := range idsByPhone {
-		if err := s.repo.MarkProcessed(ctx, phone, ids); err != nil {
-			s.recordRun(count, err)
-			return count, err
-		}
+	// Arquiva só o que já virou vaga. Falha aqui perde proveniência, não vaga —
+	// então loga e segue, em vez de reprocessar tudo no próximo flush.
+	if err := s.repo.ArchiveMessages(ctx, msgs); err != nil {
+		log.Printf("[GroupWatcher] failed to archive %d processed messages: %v", len(msgs), err)
 	}
+
+	// Descarta exatamente o prefixo processado; mensagens que chegaram durante o
+	// flush ficam para a próxima rodada.
+	s.pendingMu.Lock()
+	s.pending = s.pending[len(msgs):]
+	s.pendingMu.Unlock()
 
 	s.recordRun(count, nil)
 	return count, nil
@@ -148,14 +196,13 @@ func (s *GroupWatcher) recordRun(count int, err error) {
 	}
 }
 
-// Status monta o FlushStatus atual (contagem pendente mais o resultado da
-// última rodada de flush em memória). Retorna erro apenas se a contagem de
-// pendências falhar.
+// Status monta o FlushStatus atual: quantas mensagens estão no buffer em memória
+// mais o resultado da última rodada de flush. O erro é sempre nil hoje, mantido
+// na assinatura porque o handler já o trata.
 func (s *GroupWatcher) Status(ctx context.Context) (FlushStatus, error) {
-	pending, err := s.repo.CountPending(ctx)
-	if err != nil {
-		return FlushStatus{}, err
-	}
+	s.pendingMu.Lock()
+	pending := len(s.pending)
+	s.pendingMu.Unlock()
 
 	s.statusMu.RLock()
 	defer s.statusMu.RUnlock()
@@ -170,7 +217,8 @@ func (s *GroupWatcher) Status(ctx context.Context) (FlushStatus, error) {
 
 // Bootstrap reinstala os listeners ao vivo para todo phone com pelo menos um
 // grupo observado. Retorna erro apenas se listar os phones observados falhar;
-// falhas por phone individual só são logadas.
+// falhas por phone individual só são logadas. Não há buffer a recuperar: o que
+// não tinha sido processado antes do restart morreu com o processo.
 func (s *GroupWatcher) Bootstrap(ctx context.Context) error {
 	phones, err := s.repo.ListAllWatchedPhones(ctx)
 	if err != nil {
@@ -195,4 +243,10 @@ func (s *GroupWatcher) Bootstrap(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func sameDay(a, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.Date()
+	return ay == by && am == bm && ad == bd
 }

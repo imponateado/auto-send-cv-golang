@@ -106,39 +106,11 @@ func (r *groupWatchRepo) SetWatchedGroups(ctx context.Context, phone string, gro
 	return tx.Commit()
 }
 
-func (r *groupWatchRepo) BufferMessage(ctx context.Context, msg domain.BufferedMessage) error {
-	_, err := r.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO group_message_buffer (message_id, phone, group_jid, sender_jid, text, received_at)
-		VALUES (?, ?, ?, ?, ?, ?);`,
-		msg.MessageID, msg.Phone, msg.GroupJID, msg.SenderJID, msg.Text, msg.ReceivedAt)
-	if err != nil {
-		return fmt.Errorf("failed to buffer message: %w", err)
-	}
-	return nil
-}
-
-func (r *groupWatchRepo) PendingMessages(ctx context.Context) ([]domain.BufferedMessage, error) {
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT message_id, phone, group_jid, sender_jid, text, received_at
-		FROM group_message_buffer WHERE processed_at IS NULL;`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list pending messages: %w", err)
-	}
-	defer rows.Close()
-
-	var msgs []domain.BufferedMessage
-	for rows.Next() {
-		var m domain.BufferedMessage
-		if err := rows.Scan(&m.MessageID, &m.Phone, &m.GroupJID, &m.SenderJID, &m.Text, &m.ReceivedAt); err != nil {
-			return nil, fmt.Errorf("failed to scan buffered message: %w", err)
-		}
-		msgs = append(msgs, m)
-	}
-	return msgs, rows.Err()
-}
-
-func (r *groupWatchRepo) MarkProcessed(ctx context.Context, phone string, messageIDs []string) error {
-	if len(messageIDs) == 0 {
+// ArchiveMessages grava em lote as mensagens já processadas. processed_at é
+// preenchido na própria inserção: quando a linha nasce, a vaga já está no banco
+// vetorial. Retorna erro se a transação falhar.
+func (r *groupWatchRepo) ArchiveMessages(ctx context.Context, msgs []domain.BufferedMessage) error {
+	if len(msgs) == 0 {
 		return nil
 	}
 
@@ -149,28 +121,20 @@ func (r *groupWatchRepo) MarkProcessed(ctx context.Context, phone string, messag
 	defer tx.Rollback()
 
 	stmt, err := tx.PrepareContext(ctx,
-		`UPDATE group_message_buffer SET processed_at = ? WHERE phone = ? AND message_id = ?;`)
+		`INSERT OR IGNORE INTO group_message_buffer
+			(message_id, phone, group_jid, sender_jid, text, received_at, processed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?);`)
 	if err != nil {
-		return fmt.Errorf("failed to prepare mark-processed statement: %w", err)
+		return fmt.Errorf("failed to prepare archive statement: %w", err)
 	}
 	defer stmt.Close()
 
 	now := time.Now()
-	for _, id := range messageIDs {
-		if _, err := stmt.ExecContext(ctx, now, phone, id); err != nil {
-			return fmt.Errorf("failed to mark message %s processed: %w", id, err)
+	for _, m := range msgs {
+		if _, err := stmt.ExecContext(ctx, m.MessageID, m.Phone, m.GroupJID, m.SenderJID, m.Text, m.ReceivedAt, now); err != nil {
+			return fmt.Errorf("failed to archive message %s: %w", m.MessageID, err)
 		}
 	}
 
 	return tx.Commit()
-}
-
-func (r *groupWatchRepo) CountPending(ctx context.Context) (int, error) {
-	var count int
-	err := r.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM group_message_buffer WHERE processed_at IS NULL;`).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("failed to count pending messages: %w", err)
-	}
-	return count, nil
 }
