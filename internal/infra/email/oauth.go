@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -248,54 +249,67 @@ func (s *oauthEmailService) sendMicrosoftEmail(ctx context.Context, token, to, s
 	return nil
 }
 
+// buildRawRFC822 monta a mensagem RFC 822 enviada pela API do Gmail. Subject vai
+// em RFC 2047 e o corpo em base64, porque tanto o assunto quanto o motivo gerado
+// pelo LLM vêm em português com acento — 7bit declararia que não existe byte
+// acima de 127 e o Gmail mangla o texto.
 func buildRawRFC822(from, to, subject, body, attachmentB64, attachmentName string) ([]byte, error) {
-	var msg []byte
-	if attachmentB64 != "" {
-		boundary := "my-multipart-boundary-12345"
-		base64Data := attachmentB64
-		if idx := strings.Index(base64Data, ","); idx != -1 {
-			base64Data = base64Data[idx+1:]
-		}
-		base64Data = strings.Join(strings.Fields(base64Data), "")
-		if attachmentName == "" {
-			attachmentName = "curriculo.pdf"
-		}
-		header := fmt.Sprintf("From: %s\r\n"+
-			"To: %s\r\n"+
-			"Subject: %s\r\n"+
+	encodedSubject := mime.QEncoding.Encode("UTF-8", subject)
+	encodedBody := base64.StdEncoding.EncodeToString([]byte(body))
+
+	var buf bytes.Buffer
+	if attachmentB64 == "" {
+		fmt.Fprintf(&buf, "From: %s\r\nTo: %s\r\nSubject: %s\r\n"+
 			"MIME-Version: 1.0\r\n"+
-			"Content-Type: multipart/mixed; boundary=%s\r\n"+
-			"\r\n"+
-			"--%s\r\n"+
 			"Content-Type: text/plain; charset=UTF-8\r\n"+
-			"Content-Transfer-Encoding: 7bit\r\n"+
-			"\r\n"+
-			"%s\r\n"+
-			"\r\n"+
-			"--%s\r\n"+
-			"Content-Type: application/octet-stream; name=\"%s\"\r\n"+
-			"Content-Transfer-Encoding: base64\r\n"+
-			"Content-Disposition: attachment; filename=\"%s\"\r\n"+
-			"\r\n", from, to, subject, boundary, boundary, body, boundary, attachmentName, attachmentName)
-		var buf bytes.Buffer
-		buf.WriteString(header)
-		for i := 0; i < len(base64Data); i += 76 {
-			end := i + 76
-			if end > len(base64Data) {
-				end = len(base64Data)
-			}
-			buf.WriteString(base64Data[i:end])
-			buf.WriteString("\r\n")
-		}
-		buf.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
-		msg = buf.Bytes()
-	} else {
-		msg = []byte(fmt.Sprintf("From: %s\r\n"+
-			"To: %s\r\n"+
-			"Subject: %s\r\n"+
-			"Content-Type: text/plain; charset=UTF-8\r\n"+
-			"\r\n"+
-			"%s\r\n", from, to, subject, body))
+			"Content-Transfer-Encoding: base64\r\n\r\n",
+			from, to, encodedSubject)
+		writeWrapped(&buf, encodedBody)
+		return buf.Bytes(), nil
 	}
-	return msg, nil
+
+	base64Data := attachmentB64
+	if idx := strings.Index(base64Data, ","); idx != -1 {
+		base64Data = base64Data[idx+1:]
+	}
+	base64Data = strings.Join(strings.Fields(base64Data), "")
+	if attachmentName == "" {
+		attachmentName = "curriculo.pdf"
+	}
+
+	const boundary = "my-multipart-boundary-12345"
+
+	// Parte 1: o corpo da mensagem.
+	fmt.Fprintf(&buf, "From: %s\r\nTo: %s\r\nSubject: %s\r\n"+
+		"MIME-Version: 1.0\r\n"+
+		"Content-Type: multipart/mixed; boundary=%s\r\n\r\n"+
+		"--%s\r\n"+
+		"Content-Type: text/plain; charset=UTF-8\r\n"+
+		"Content-Transfer-Encoding: base64\r\n\r\n",
+		from, to, encodedSubject, boundary, boundary)
+	writeWrapped(&buf, encodedBody)
+
+	// Parte 2: o currículo em anexo.
+	fmt.Fprintf(&buf, "\r\n--%s\r\n"+
+		"Content-Type: application/pdf; name=%q\r\n"+
+		"Content-Transfer-Encoding: base64\r\n"+
+		"Content-Disposition: attachment; filename=%q\r\n\r\n",
+		boundary, attachmentName, attachmentName)
+	writeWrapped(&buf, base64Data)
+
+	fmt.Fprintf(&buf, "--%s--\r\n", boundary)
+	return buf.Bytes(), nil
+}
+
+// writeWrapped escreve s em linhas de 76 caracteres terminadas em CRLF, como o
+// RFC 2045 exige de corpos base64.
+func writeWrapped(buf *bytes.Buffer, s string) {
+	for i := 0; i < len(s); i += 76 {
+		end := i + 76
+		if end > len(s) {
+			end = len(s)
+		}
+		buf.WriteString(s[i:end])
+		buf.WriteString("\r\n")
+	}
 }
