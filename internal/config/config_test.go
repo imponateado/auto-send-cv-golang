@@ -56,3 +56,19 @@ TEST_PRESERVED = env-file-value
 		t.Errorf("expected TEST_PRESERVED to remain system-value (precedence), got: %s", val)
 	}
 }
+
+// O prefixo de tarefa do modelo de embedding termina em espaço
+// ("search_document: "), e ParseEnv faz TrimSpace na linha. Sem aspas o espaço
+// morreria e o prefixo sairia colado no texto da vaga.
+func TestParseEnvKeepsTrailingSpaceInsideQuotes(t *testing.T) {
+	t.Setenv("EMBEDDING_DOC_PREFIX", "")
+	os.Unsetenv("EMBEDDING_DOC_PREFIX")
+
+	if err := ParseEnv(strings.NewReader(`EMBEDDING_DOC_PREFIX="search_document: "`)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := os.Getenv("EMBEDDING_DOC_PREFIX"); got != "search_document: " {
+		t.Errorf("aspas devem preservar o espaço final: want %q, got %q", "search_document: ", got)
+	}
+}

@@ -25,6 +25,7 @@ type orchestrator struct {
 	newEmailService  func(creds *domain.EmailCredentials) domain.EmailService
 	matchesMu        sync.RWMutex
 	matches          map[string]*domain.MatchRecord
+	dispatcher       *dispatcher
 }
 
 func NewOrchestrator(
@@ -34,7 +35,7 @@ func NewOrchestrator(
 	credsRepo domain.CredentialsRepository,
 	waManager domain.WhatsAppManager,
 ) domain.Orchestrator {
-	return &orchestrator{
+	o := &orchestrator{
 		geminiService:    geminiService,
 		embeddingService: embeddingService,
 		vectorStore:      vectorStore,
@@ -45,6 +46,30 @@ func NewOrchestrator(
 		},
 		matches: make(map[string]*domain.MatchRecord),
 	}
+	o.dispatcher = newDispatcher(o.sendJob, nil)
+	return o
+}
+
+// sendJob executa um job da fila. É o que o dispatcher chama depois de esperar o
+// intervalo do canal.
+func (o *orchestrator) sendJob(ctx context.Context, job dispatchJob) error {
+	switch job.Channel {
+	case channelEmail:
+		if job.EmailService == nil {
+			return fmt.Errorf("serviço de e-mail ausente no job")
+		}
+		return job.EmailService.SendEmail(ctx, job.Target, job.Subject, job.Body, job.FileB64, job.Filename)
+
+	case channelWhatsApp:
+		fileBytes, err := base64.StdEncoding.DecodeString(job.FileB64)
+		if err != nil {
+			return fmt.Errorf("falha ao decodificar currículo em base64: %w", err)
+		}
+		return o.waManager.SendDocument(ctx, job.SenderPhone, job.Target, job.Body, fileBytes, job.Filename)
+
+	default:
+		return fmt.Errorf("canal de envio desconhecido: %q", job.Channel)
+	}
 }
 
 type dispatchResult struct {
@@ -52,7 +77,82 @@ type dispatchResult struct {
 	status string
 }
 
+// Prefixos de tarefa do modelo de embedding. O nomic-embed-text é treinado com
+// eles; sem os prefixos, a similaridade entre quaisquer dois textos do mesmo
+// assunto fica artificialmente alta e o threshold deixa de separar qualquer
+// coisa. Configuráveis porque outros modelos usam prefixos diferentes ou nenhum.
+const (
+	defaultDocPrefix   = "search_document: "
+	defaultQueryPrefix = "search_query: "
+)
+
+// embeddingPrefix lê o prefixo de env, caindo no default quando a variável não
+// está definida. Definida e vazia desliga o prefixo — daí a checagem por
+// presença em vez de por valor vazio.
+func embeddingPrefix(envVar, fallback string) string {
+	if v, ok := os.LookupEnv(envVar); ok {
+		return v
+	}
+	return fallback
+}
+
+// logMu serializa as escritas no arquivo de execução: os dois workers do
+// dispatcher anexam o desfecho de cada envio, e um match novo pode estar
+// escrevendo o cabeçalho ao mesmo tempo.
+var logMu sync.Mutex
+
+// appendToLog anexa text ao arquivo de execução.
+func appendToLog(filename, text string) error {
+	logMu.Lock()
+	defer logMu.Unlock()
+
+	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = file.WriteString(text)
+	return err
+}
+
+// appendDispatchOutcome registra no log de execução o desfecho de um envio. Sem
+// isso o arquivo congelaria em "Enfileirado": o resultado real só existiria no
+// stdout e no histórico em memória, que somem num restart.
+func appendDispatchOutcome(filename, channel, target, vacancyID, status string) {
+	if filename == "" {
+		return
+	}
+
+	var b strings.Builder
+	b.WriteString("--------------------------------------------------------------------------------\n")
+	b.WriteString(fmt.Sprintf("ENVIO CONCLUÍDO: %s\n", time.Now().Format("2006-01-02 15:04:05")))
+	b.WriteString(fmt.Sprintf("- ID da Vaga: %s\n", vacancyID))
+	b.WriteString(fmt.Sprintf("- Canal: %s\n", channel))
+	b.WriteString(fmt.Sprintf("- Destino: %s\n", target))
+	b.WriteString(fmt.Sprintf("- Status Final: %s\n", status))
+
+	if err := appendToLog(filename, b.String()); err != nil {
+		log.Printf("[Dispatcher] Erro ao registrar desfecho no log %s: %v", filename, err)
+	}
+}
+
+// summarizeVacancy devolve uma linha única identificando a vaga, para a
+// listagem de pré-filtragem. Corta em 100 caracteres contando runas, não bytes,
+// para não partir um acento ao meio.
+func summarizeVacancy(text string) string {
+	oneLine := strings.Join(strings.Fields(text), " ")
+	runes := []rune(oneLine)
+	if len(runes) > 100 {
+		return string(runes[:100]) + "..."
+	}
+	return oneLine
+}
+
 func writeExecutionLog(filename string, startTime time.Time, processedCount int64, matchCount int, results []dispatchResult, vacancies []domain.Vacancy, skippedReason string) error {
+	logMu.Lock()
+	defer logMu.Unlock()
+
 	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		return err
@@ -76,10 +176,11 @@ func writeExecutionLog(filename string, startTime time.Time, processedCount int6
 		builder.WriteString(fmt.Sprintf("================================================================================\n"))
 		builder.WriteString(fmt.Sprintf("VAGAS APROVADAS NA PRÉ-FILTRAGEM SEMÂNTICA:\n"))
 		builder.WriteString(fmt.Sprintf("--------------------------------------------------------------------------------\n"))
+		// Só o resumo de cada vaga aqui: sem limite de vagas, despejar o texto
+		// completo das centenas pré-filtradas fazia o log passar de 100KB por
+		// execução. O texto integral segue na seção de matches, que é onde importa.
 		for _, v := range vacancies {
-			builder.WriteString(fmt.Sprintf("[%s] Score Cosseno: %.4f\n", v.ID, v.Score))
-			builder.WriteString(fmt.Sprintf("- Conteúdo: %s\n", strings.ReplaceAll(strings.TrimSpace(v.Text), "\n", " / ")))
-			builder.WriteString("\n")
+			builder.WriteString(fmt.Sprintf("[%s] Score: %.4f | %s\n", v.ID, v.Score, summarizeVacancy(v.Text)))
 		}
 
 		builder.WriteString(fmt.Sprintf("================================================================================\n"))
@@ -140,6 +241,19 @@ func (o *orchestrator) recordMatch(result *domain.ProcessResult) {
 	o.matchesMu.Unlock()
 }
 
+// snapshot copia um MatchRecord para leitura fora do lock. Necessário porque o
+// dispatcher segue escrevendo Matches[i].Status depois que o registro foi
+// devolvido, e o handler só serializa o JSON já sem o lock.
+func snapshot(r *domain.MatchRecord) *domain.MatchRecord {
+	copied := *r
+	if r.Result != nil {
+		result := *r.Result
+		result.Matches = append([]domain.Match(nil), r.Result.Matches...)
+		copied.Result = &result
+	}
+	return &copied
+}
+
 // ListMatches retorna o histórico de execuções de MatchResume desta sessão do
 // servidor (em memória, perdido num restart).
 func (o *orchestrator) ListMatches(ctx context.Context) ([]*domain.MatchRecord, error) {
@@ -148,7 +262,7 @@ func (o *orchestrator) ListMatches(ctx context.Context) ([]*domain.MatchRecord, 
 
 	records := make([]*domain.MatchRecord, 0, len(o.matches))
 	for _, r := range o.matches {
-		records = append(records, r)
+		records = append(records, snapshot(r))
 	}
 	return records, nil
 }
@@ -163,7 +277,7 @@ func (o *orchestrator) GetMatch(ctx context.Context, id string) (*domain.MatchRe
 	if !exists {
 		return nil, fmt.Errorf("match %s not found", id)
 	}
-	return r, nil
+	return snapshot(r), nil
 }
 
 // DeleteMatch remove um MatchRecord do histórico em memória pelo ID. Retorna
@@ -231,7 +345,15 @@ func (o *orchestrator) populateItems(ctx context.Context, items []string) (int, 
 		batchItems := newItems[i:end]
 		log.Printf("[Orchestrator] Gerando embeddings para o lote de vagas novas %d até %d...", i, end-1)
 
-		embs, err := o.embeddingService.GetEmbeddings(ctx, batchItems)
+		// Só o texto mandado ao modelo leva o prefixo de tarefa; o que vai para o
+		// banco e para a LLM continua sendo o texto original.
+		prefixed := make([]string, len(batchItems))
+		docPrefix := embeddingPrefix("EMBEDDING_DOC_PREFIX", defaultDocPrefix)
+		for j, t := range batchItems {
+			prefixed[j] = docPrefix + t
+		}
+
+		embs, err := o.embeddingService.GetEmbeddings(ctx, prefixed)
 		if err != nil {
 			return itemsSaved, fmt.Errorf("failed to generate embeddings for batch %d-%d: %w", i, end-1, err)
 		}
@@ -276,7 +398,8 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 	log.Printf("[Orchestrator] Texto do currículo extraído (%d caracteres). Preview:\n%s", len(resumeText), resumePreview)
 
 	log.Println("[Orchestrator] Solicitando embedding para o currículo...")
-	resumeEmbs, err := o.embeddingService.GetEmbeddings(ctx, []string{resumeText})
+	queryPrefix := embeddingPrefix("EMBEDDING_QUERY_PREFIX", defaultQueryPrefix)
+	resumeEmbs, err := o.embeddingService.GetEmbeddings(ctx, []string{queryPrefix + resumeText})
 	if err != nil || len(resumeEmbs) == 0 {
 		log.Printf("[Orchestrator] Falha ao gerar embedding do currículo: %v", err)
 		_ = writeExecutionLog(logFilename, start, 0, 0, nil, nil, fmt.Sprintf("Erro ao obter embedding do currículo: %v", err))
@@ -293,7 +416,18 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 		}
 	}
 
-	matchedVacancies, err := o.vectorStore.SearchSimilarity(ctx, resumeEmbedding, 10, threshold)
+	// 0 = sem limite. Quem filtra aptidão é a LLM adiante; cortar aqui em N
+	// descartaria vagas com score praticamente idêntico ao das que passaram.
+	vacancyLimit := 0
+	if s := os.Getenv("MATCH_VACANCY_LIMIT"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v >= 0 {
+			vacancyLimit = v
+		} else {
+			log.Printf("[Orchestrator] MATCH_VACANCY_LIMIT inválido (%q), usando 0 (sem limite)", s)
+		}
+	}
+
+	matchedVacancies, err := o.vectorStore.SearchSimilarity(ctx, resumeEmbedding, vacancyLimit, threshold)
 	if err != nil {
 		log.Printf("[Orchestrator] Erro na busca vetorial local: %v", err)
 		_ = writeExecutionLog(logFilename, start, 0, 0, nil, nil, fmt.Sprintf("Erro na busca de similaridade: %v", err))
@@ -343,90 +477,140 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 	// Credenciais e cliente de e-mail são os mesmos para todos os matches: buscar
 	// dentro do loop faria uma leitura no banco e um refresh de token por disparo.
 	var emailService domain.EmailService
-	emailUnavailable := "Não disparado (e-mail do candidato não fornecido)"
+	emailUnavailable := "Não disparado (campo 'candidate_email' ausente na requisição)"
 	if candidateEmail != "" {
 		log.Printf("[Orchestrator] Obtendo credenciais OAuth2 para o candidato %s...", candidateEmail)
 		creds, err := o.credsRepo.GetEmailCredentials(ctx, candidateEmail)
 		if err != nil {
 			log.Printf("[Orchestrator] Erro ao carregar credenciais para %s: %v", candidateEmail, err)
-			emailUnavailable = fmt.Sprintf("Erro ao carregar credenciais de e-mail: %v", err)
+			emailUnavailable = fmt.Sprintf("Não disparado (sem credenciais OAuth2 para %s — cadastre em POST /api/v1/credentials): %v", candidateEmail, err)
 		} else {
 			emailService = o.newEmailService(creds)
 		}
 	}
 
-	var dispatchResults []dispatchResult
-	for i, match := range matchRes.Matches {
-		log.Printf("[Orchestrator] Processando disparo %d/%d (vaga: %s, contato: %s, destino: %s)", i+1, len(matchRes.Matches), match.VacancyID, match.ContactType, match.ContactTarget)
-		status := "Não disparado (sem contato válido)"
-		switch match.ContactType {
-		case "email":
-			if emailService == nil {
-				log.Printf("[Orchestrator] Sem serviço de e-mail disponível: %s", emailUnavailable)
-				status = emailUnavailable
-				break
+	// Sem canal de e-mail, todo match por e-mail morre em silêncio. Como a maioria
+	// das vagas pede currículo por e-mail, isso costuma ser a maior parte delas.
+	if emailService == nil {
+		emailMatches := 0
+		for _, m := range matchRes.Matches {
+			if m.ContactType == channelEmail {
+				emailMatches++
 			}
-
-			log.Printf("[Orchestrator] Enviando E-mail -> para: %s...", match.ContactTarget)
-			subject := "Candidatura - Processamento Automático"
-			body := fmt.Sprintf("Olá,\n\nEstou me candidatando à sua vaga de emprego.\n\nMotivo da compatibilidade:\n%s\n\nEm anexo, envio meu currículo para avaliação.\n\nAtenciosamente,\nCandidato", match.Reason)
-
-			err := emailService.SendEmail(ctx, match.ContactTarget, subject, body, fileB64, "curriculo.pdf")
-			if err != nil {
-				log.Printf("[Orchestrator] Falha no e-mail para %s: %v", match.ContactTarget, err)
-				status = fmt.Sprintf("Erro no envio do e-mail: %v", err)
-			} else {
-				log.Printf("[Orchestrator] E-mail enviado com sucesso para %s", match.ContactTarget)
-				status = "Sucesso (e-mail enviado)"
-			}
-
-		case "whatsapp":
-			if candidatePhone == "" {
-				log.Println("[Orchestrator] Telefone do candidato não fornecido na requisição. Pulando disparo.")
-				status = "Não disparado (telefone do candidato não fornecido)"
-				break
-			}
-
-			fileBytes, err := base64.StdEncoding.DecodeString(fileB64)
-			if err != nil {
-				log.Printf("[Orchestrator] Falha ao decodificar currículo em base64: %v", err)
-				status = fmt.Sprintf("Erro ao decodificar currículo: %v", err)
-				break
-			}
-
-			log.Printf("[Orchestrator] Enviando WhatsApp via WhatsMeow -> para: %s...", match.ContactTarget)
-			caption := fmt.Sprintf("Olá!\n\nEstou me candidatando à sua vaga de emprego.\n\n*Motivo do Match:*\n%s\n\nEm anexo, envio meu currículo para avaliação.", match.Reason)
-
-			err = o.waManager.SendDocument(ctx, candidatePhone, match.ContactTarget, caption, fileBytes, "curriculo.pdf")
-			if err != nil {
-				log.Printf("[Orchestrator] Falha no WhatsApp para %s: %v", match.ContactTarget, err)
-				status = fmt.Sprintf("Erro no envio do WhatsApp: %v", err)
-			} else {
-				log.Printf("[Orchestrator] WhatsApp enviado com sucesso para %s", match.ContactTarget)
-				status = "Sucesso (WhatsApp enviado)"
-			}
-
-		default:
-			log.Printf("[Orchestrator] Tipo de contato desconhecido '%s'. Pulando.", match.ContactType)
-			status = fmt.Sprintf("Não disparado (tipo de contato desconhecido: '%s')", match.ContactType)
 		}
-
-		dispatchResults = append(dispatchResults, dispatchResult{
-			match:  match,
-			status: status,
-		})
+		if emailMatches > 0 {
+			log.Printf("[Orchestrator] ATENÇÃO: %d de %d matches são por e-mail e não serão enviados. Motivo: %s",
+				emailMatches, len(matchRes.Matches), emailUnavailable)
+		}
 	}
 
-	err = writeExecutionLog(logFilename, start, int64(len(matchedVacancies)), len(matchRes.Matches), dispatchResults, matchedVacancies, "")
-	if err != nil {
-		log.Printf("[Orchestrator] Erro ao gravar arquivo de log %s: %v", logFilename, err)
-	}
-
+	// O resultado é registrado ANTES de enfileirar: os callbacks do dispatcher
+	// escrevem status nele conforme os envios acontecem, e é esse mesmo ponteiro
+	// que GET /api/v1/matches/{id} devolve.
 	result := &domain.ProcessResult{
 		Status:     "success",
 		Matches:    matchRes.Matches,
 		DurationMs: time.Since(start).Milliseconds(),
 	}
 	o.recordMatch(result)
-	return result, nil
+
+	var dispatchResults []dispatchResult
+	for i := range result.Matches {
+		match := result.Matches[i]
+		log.Printf("[Orchestrator] Enfileirando disparo %d/%d (vaga: %s, contato: %s, destino: %s)", i+1, len(result.Matches), match.VacancyID, match.ContactType, match.ContactTarget)
+
+		job, status := o.buildDispatchJob(match, emailService, emailUnavailable, candidatePhone, fileB64)
+		job.LogFile = logFilename
+		queue := status == ""
+		if queue {
+			status = "Enfileirado"
+		}
+
+		// O status inicial precisa ser gravado ANTES do enqueue: o dispatcher pode
+		// concluir o envio e escrever "Sucesso" antes desta linha rodar, e gravar
+		// depois sobrescreveria o resultado real com "Enfileirado" para sempre.
+		o.setMatchStatus(result, i, status)
+
+		if queue {
+			job.onResult = o.matchStatusSetter(result, i)
+			if err := o.dispatcher.enqueue(job); err != nil {
+				status = fmt.Sprintf("Erro ao enfileirar: %v", err)
+				o.setMatchStatus(result, i, status)
+			}
+		}
+
+		match.Status = status
+		dispatchResults = append(dispatchResults, dispatchResult{match: match, status: status})
+	}
+
+	err = writeExecutionLog(logFilename, start, int64(len(matchedVacancies)), len(result.Matches), dispatchResults, matchedVacancies, "")
+	if err != nil {
+		log.Printf("[Orchestrator] Erro ao gravar arquivo de log %s: %v", logFilename, err)
+	}
+
+	// Devolve uma cópia: o result registrado segue sendo escrito pelo dispatcher, e
+	// o handler serializa o JSON já fora do lock.
+	o.matchesMu.RLock()
+	defer o.matchesMu.RUnlock()
+	returned := *result
+	returned.Matches = append([]domain.Match(nil), result.Matches...)
+	return &returned, nil
+}
+
+// buildDispatchJob monta o job de envio de match. Devolve status não-vazio
+// quando o disparo nem chega a ser enfileirado — falta de credencial, de
+// telefone ou canal desconhecido.
+func (o *orchestrator) buildDispatchJob(match domain.Match, emailService domain.EmailService, emailUnavailable, candidatePhone, fileB64 string) (dispatchJob, string) {
+	switch match.ContactType {
+	case channelEmail:
+		if emailService == nil {
+			return dispatchJob{}, emailUnavailable
+		}
+		return dispatchJob{
+			Channel:      channelEmail,
+			Target:       match.ContactTarget,
+			VacancyID:    match.VacancyID,
+			EmailService: emailService,
+			Subject:      "Candidatura - Processamento Automático",
+			Body: fmt.Sprintf("Olá,\n\nEstou me candidatando à sua vaga de emprego.\n\nMotivo da compatibilidade:\n%s\n\n"+
+				"Em anexo, envio meu currículo para avaliação.\n\nAtenciosamente,\nCandidato", match.Reason),
+			FileB64:  fileB64,
+			Filename: "curriculo.pdf",
+		}, ""
+
+	case channelWhatsApp:
+		if candidatePhone == "" {
+			return dispatchJob{}, "Não disparado (telefone do candidato não fornecido)"
+		}
+		return dispatchJob{
+			Channel:     channelWhatsApp,
+			Target:      match.ContactTarget,
+			VacancyID:   match.VacancyID,
+			SenderPhone: candidatePhone,
+			Body: fmt.Sprintf("Olá!\n\nEstou me candidatando à sua vaga de emprego.\n\n*Motivo do Match:*\n%s\n\n"+
+				"Em anexo, envio meu currículo para avaliação.", match.Reason),
+			FileB64:  fileB64,
+			Filename: "curriculo.pdf",
+		}, ""
+
+	default:
+		return dispatchJob{}, fmt.Sprintf("Não disparado (tipo de contato desconhecido: '%s')", match.ContactType)
+	}
+}
+
+// setMatchStatus grava o status do match de índice i sob o mesmo lock que serve
+// GET /api/v1/matches/{id}. O ponteiro result já está no histórico, então
+// goroutines do dispatcher e leitores HTTP disputam esses campos.
+func (o *orchestrator) setMatchStatus(result *domain.ProcessResult, i int, status string) {
+	o.matchesMu.Lock()
+	result.Matches[i].Status = status
+	o.matchesMu.Unlock()
+}
+
+// matchStatusSetter devolve o callback que o dispatcher usa para reportar o
+// desfecho do envio do match de índice i.
+func (o *orchestrator) matchStatusSetter(result *domain.ProcessResult, i int) func(string) {
+	return func(status string) {
+		o.setMatchStatus(result, i, status)
+	}
 }

@@ -85,13 +85,10 @@ func (m *mockOrchestrator) DeleteMatch(ctx context.Context, id string) error {
 }
 
 func TestGroupWatcherDebounce(t *testing.T) {
-	orig := debounceDelay
-	debounceDelay = 20 * time.Millisecond
-	defer func() { debounceDelay = orig }()
-
 	repo := &mockGroupWatchRepo{}
 	orch := &mockOrchestrator{}
 	gw := NewGroupWatcher(repo, nil, orch)
+	gw.debounceDelay = 20 * time.Millisecond
 
 	gw.onMessage("phone", domain.BufferedMessage{MessageID: "1", Phone: "p", Text: "hello", ReceivedAt: time.Now()})
 
@@ -107,13 +104,10 @@ func TestGroupWatcherDebounce(t *testing.T) {
 }
 
 func TestGroupWatcherDebounceResetOnNewMessage(t *testing.T) {
-	orig := debounceDelay
-	debounceDelay = 30 * time.Millisecond
-	defer func() { debounceDelay = orig }()
-
 	repo := &mockGroupWatchRepo{}
 	orch := &mockOrchestrator{}
 	gw := NewGroupWatcher(repo, nil, orch)
+	gw.debounceDelay = 30 * time.Millisecond
 
 	gw.onMessage("phone", domain.BufferedMessage{MessageID: "1", Phone: "p", Text: "a", ReceivedAt: time.Now()})
 	time.Sleep(15 * time.Millisecond)

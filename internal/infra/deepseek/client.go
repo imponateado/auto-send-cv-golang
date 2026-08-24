@@ -33,7 +33,7 @@ func NewDeepSeekClient(apiKey, model string) domain.GeminiService {
 		model:  model,
 		apiURL: "https://api.deepseek.com",
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: 5 * time.Minute,
 		},
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -18,13 +19,31 @@ type FlushStatus struct {
 	PendingCount int        `json:"pending_count"`
 }
 
-var debounceDelay = 10 * time.Minute
+const defaultDebounceDelay = 10 * time.Minute
+
+// debounceDelayFromEnv lê GROUP_FLUSH_DEBOUNCE como uma duração ("2m", "10m",
+// "30s"). Valor ausente ou inválido cai no default, logando o motivo — um typo
+// na variável não pode virar um watcher que nunca dispara.
+func debounceDelayFromEnv() time.Duration {
+	raw := os.Getenv("GROUP_FLUSH_DEBOUNCE")
+	if raw == "" {
+		return defaultDebounceDelay
+	}
+
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		log.Printf("[GroupWatcher] GROUP_FLUSH_DEBOUNCE inválido (%q), usando o default de %s", raw, defaultDebounceDelay)
+		return defaultDebounceDelay
+	}
+	return d
+}
 
 type GroupWatcher struct {
 	repo         domain.GroupWatchRepository
 	waManager    *whatsapp.WhatsMeowManager
 	orchestrator domain.Orchestrator
 
+	debounceDelay time.Duration
 	debounceMu    sync.Mutex
 	debounceTimer *time.Timer
 
@@ -51,10 +70,14 @@ type GroupWatcher struct {
 }
 
 func NewGroupWatcher(repo domain.GroupWatchRepository, waManager *whatsapp.WhatsMeowManager, orchestrator domain.Orchestrator) *GroupWatcher {
+	delay := debounceDelayFromEnv()
+	log.Printf("[GroupWatcher] Flush automático após %s de silêncio no grupo.", delay)
+
 	return &GroupWatcher{
-		repo:         repo,
-		waManager:    waManager,
-		orchestrator: orchestrator,
+		repo:          repo,
+		waManager:     waManager,
+		orchestrator:  orchestrator,
+		debounceDelay: delay,
 	}
 }
 
@@ -115,14 +138,15 @@ func (s *GroupWatcher) onMessage(_ string, msg domain.BufferedMessage) {
 	s.resetDebounce()
 }
 
-// resetDebounce reinicia o timer de debounce do flush automático: se debounceDelay se passar sem uma nova mensagem, dispara FlushNow sozinho.
+// resetDebounce reinicia o timer de debounce do flush automático: se
+// s.debounceDelay se passar sem uma nova mensagem, dispara FlushNow sozinho.
 func (s *GroupWatcher) resetDebounce() {
 	s.debounceMu.Lock()
 	defer s.debounceMu.Unlock()
 	if s.debounceTimer != nil {
 		s.debounceTimer.Stop()
 	}
-	s.debounceTimer = time.AfterFunc(debounceDelay, func() {
+	s.debounceTimer = time.AfterFunc(s.debounceDelay, func() {
 		if _, err := s.FlushNow(context.Background()); err != nil {
 			log.Printf("[GroupWatcher] debounced flush failed: %v", err)
 		}

@@ -213,3 +213,32 @@ func TestAddVacanciesRejectsSizeMismatch(t *testing.T) {
 		t.Error("esperava erro quando a contagem de vagas e embeddings difere")
 	}
 }
+
+// limit <= 0 significa "sem limite": quem filtra aptidão é a LLM adiante, e um
+// corte em N aqui descartaria vagas com score praticamente idêntico às que
+// passaram.
+func TestSearchSimilarityUnlimited(t *testing.T) {
+	store, ctx := newTestVacancyStore(t)
+
+	vacancies := []string{"a", "b", "c", "d"}
+	embeddings := [][]float32{{1, 0}, {1, 0}, {1, 0}, {1, 0}}
+	if err := store.AddVacancies(ctx, vacancies, embeddings); err != nil {
+		t.Fatalf("failed to seed: %v", err)
+	}
+
+	all, err := store.SearchSimilarity(ctx, []float32{1, 0}, 0, 0.5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(all) != 4 {
+		t.Errorf("limit=0 deve devolver todas as vagas acima do threshold, got %d", len(all))
+	}
+
+	capped, err := store.SearchSimilarity(ctx, []float32{1, 0}, 2, 0.5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(capped) != 2 {
+		t.Errorf("limit=2 deve cortar em 2, got %d", len(capped))
+	}
+}

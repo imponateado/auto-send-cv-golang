@@ -13,6 +13,10 @@ type Match struct {
 	Reason        string `json:"reason"`
 	ContactType   string `json:"contact_type"`
 	ContactTarget string `json:"contact_target"`
+	// Status do disparo. Nasce "Enfileirado" e é atualizado pelo dispatcher
+	// conforme os envios acontecem — o POST /match responde antes de enviar, então
+	// a confirmação vem por GET /api/v1/matches/{id}.
+	Status string `json:"status"`
 }
 
 type MatchResult struct {

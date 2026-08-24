@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -48,7 +50,18 @@ func NewWhatsMeowManager(dbPath string) (*WhatsMeowManager, error) {
 	}, nil
 }
 
+// EnsureClient devolve o client de phone, criando um device novo em branco se
+// ele ainda não estiver pareado. Só serve ao fluxo de pareamento e à consulta de
+// status — para qualquer outra coisa use ensureClient com createIfMissing false,
+// que falha em vez de fabricar um device que nunca vai conseguir enviar nada.
 func (m *WhatsMeowManager) EnsureClient(ctx context.Context, phone string) (*whatsmeow.Client, error) {
+	return m.ensureClient(ctx, phone, true)
+}
+
+// ensureClient devolve o client de phone. createIfMissing decide o que fazer
+// quando não há device pareado: o pareamento precisa de um device em branco;
+// enviar, listar grupos ou observá-los precisa de um erro claro.
+func (m *WhatsMeowManager) ensureClient(ctx context.Context, phone string, createIfMissing bool) (*whatsmeow.Client, error) {
 	m.clientsMu.Lock()
 	defer m.clientsMu.Unlock()
 
@@ -82,6 +95,9 @@ func (m *WhatsMeowManager) EnsureClient(ctx context.Context, phone string) (*wha
 	}
 
 	if devStore == nil {
+		if !createIfMissing {
+			return nil, fmt.Errorf("número %s não está pareado — escaneie o QR em GET /api/v1/whatsapp/qr?phone=%s", phone, phone)
+		}
 		devStore = m.container.NewDevice()
 	}
 
@@ -236,7 +252,7 @@ func (m *WhatsMeowManager) ListConnected(ctx context.Context) ([]domain.WhatsApp
 // membro. Retorna a lista de domain.GroupInfo, ou erro se a conexão ou a
 // consulta falhar.
 func (m *WhatsMeowManager) ListJoinedGroups(ctx context.Context, phone string) ([]domain.GroupInfo, error) {
-	cli, err := m.EnsureClient(ctx, phone)
+	cli, err := m.ensureClient(ctx, phone, false)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +273,7 @@ func (m *WhatsMeowManager) ListJoinedGroups(ctx context.Context, phone string) (
 // que encaminha para onMessage qualquer mensagem de texto vinda de um JID em
 // watchedJIDs. Retorna erro apenas se obter/conectar o client falhar.
 func (m *WhatsMeowManager) WatchGroups(ctx context.Context, phone string, watchedJIDs []string, onMessage GroupMessageCallback) error {
-	cli, err := m.EnsureClient(ctx, phone)
+	cli, err := m.ensureClient(ctx, phone, false)
 	if err != nil {
 		return err
 	}
@@ -343,6 +359,52 @@ func buildRecipientJID(to string) (types.JID, error) {
 	return types.ParseJID(digits + "@s.whatsapp.net")
 }
 
+// resolveRecipient converte to no JID canônico com que o WhatsApp realmente
+// endereça o destinatário, consultando o servidor.
+//
+// Não dá para mandar direto para "<numero>@s.whatsapp.net": desde a migração
+// para LID, o whatsmeow precisa traduzir o número para um LID antes de enviar, e
+// ele só consegue fazer isso sozinho se o número já estiver no cache local — o
+// que nunca acontece aqui, porque os recrutadores são números lidos do texto de
+// uma vaga, com quem o candidato nunca conversou. Sem esta consulta o envio
+// morre com "no LID found for ... from server".
+//
+// De quebra resolve o nono dígito: celular brasileiro é divulgado como
+// (61) 99596-8079, mas muitas contas estão registradas na forma antiga, de oito
+// dígitos. O JID devolvido aqui é o que o WhatsApp usa de fato.
+func resolveRecipient(ctx context.Context, cli *whatsmeow.Client, to string) (types.JID, error) {
+	jid, err := buildRecipientJID(to)
+	if err != nil {
+		return types.EmptyJID, fmt.Errorf("failed to parse recipient JID: %w", err)
+	}
+
+	// Um JID já explícito (inclusive @lid) vem pronto do chamador.
+	if strings.Contains(to, "@") {
+		return jid, nil
+	}
+
+	results, err := cli.IsOnWhatsApp(ctx, []string{jid.User})
+	if err != nil {
+		return types.EmptyJID, fmt.Errorf("failed to check if %s is on whatsapp: %w", jid.User, err)
+	}
+	if len(results) == 0 {
+		return types.EmptyJID, fmt.Errorf("número %s não retornou resultado na consulta ao WhatsApp", jid.User)
+	}
+
+	res := results[0]
+	if !res.IsIn {
+		return types.EmptyJID, fmt.Errorf("número %s não tem WhatsApp", jid.User)
+	}
+	if res.JID.IsEmpty() {
+		return types.EmptyJID, fmt.Errorf("WhatsApp não devolveu JID canônico para %s", jid.User)
+	}
+
+	if res.JID.User != jid.User {
+		log.Printf("[WhatsMeow] Número %s resolvido para %s pelo servidor", jid.User, res.JID)
+	}
+	return res.JID, nil
+}
+
 func (m *WhatsMeowManager) Disconnect(ctx context.Context, phone string) error {
 	m.clientsMu.Lock()
 	defer m.clientsMu.Unlock()
@@ -388,7 +450,7 @@ func (m *WhatsMeowManager) Disconnect(ctx context.Context, phone string) error {
 }
 
 func (m *WhatsMeowManager) SendMessage(ctx context.Context, phoneSender string, to string, message string) error {
-	cli, err := m.EnsureClient(ctx, phoneSender)
+	cli, err := m.ensureClient(ctx, phoneSender, false)
 	if err != nil {
 		return fmt.Errorf("failed to initialize client for sender: %w", err)
 	}
@@ -404,9 +466,9 @@ func (m *WhatsMeowManager) SendMessage(ctx context.Context, phoneSender string, 
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	targetJID, err := buildRecipientJID(to)
+	targetJID, err := resolveRecipient(ctx, cli, to)
 	if err != nil {
-		return fmt.Errorf("failed to parse recipient JID: %w", err)
+		return err
 	}
 
 	payload := &waE2E.Message{
@@ -421,8 +483,39 @@ func (m *WhatsMeowManager) SendMessage(ctx context.Context, phoneSender string, 
 	return nil
 }
 
+// sendTypingIndicator mostra "digitando" para o destinatário antes do envio, de
+// modo que a candidatura não chegue com cara de disparo automático — mesma
+// intenção do espaçamento entre envios no dispatcher.
+//
+// Falha aqui é puramente cosmética, então o erro só é logado: perder o
+// "digitando" não pode impedir a candidatura de sair. Note que o WhatsApp só
+// entrega o chatstate se a conta estiver marcada como online, o que a torna
+// visível como online para todos os contatos.
+func sendTypingIndicator(ctx context.Context, cli *whatsmeow.Client, to types.JID) {
+	if err := cli.SendChatPresence(ctx, to, types.ChatPresenceComposing, types.ChatPresenceMediaText); err != nil {
+		log.Printf("[WhatsMeow] não foi possível enviar presença 'digitando' para %s: %v", to, err)
+		return
+	}
+
+	select {
+	case <-time.After(typingDuration()):
+	case <-ctx.Done():
+		return
+	}
+
+	if err := cli.SendChatPresence(ctx, to, types.ChatPresencePaused, types.ChatPresenceMediaText); err != nil {
+		log.Printf("[WhatsMeow] não foi possível encerrar a presença 'digitando' para %s: %v", to, err)
+	}
+}
+
+// typingDuration devolve por quanto tempo o "digitando" fica visível: 3 a 7
+// segundos, tempo plausível para alguém escrever uma mensagem curta.
+func typingDuration() time.Duration {
+	return 3*time.Second + rand.N(4001*time.Millisecond)
+}
+
 func (m *WhatsMeowManager) SendDocument(ctx context.Context, phoneSender string, to string, caption string, fileBytes []byte, filename string) error {
-	cli, err := m.EnsureClient(ctx, phoneSender)
+	cli, err := m.ensureClient(ctx, phoneSender, false)
 	if err != nil {
 		return fmt.Errorf("failed to initialise client for sender: %w", err)
 	}
@@ -438,15 +531,17 @@ func (m *WhatsMeowManager) SendDocument(ctx context.Context, phoneSender string,
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	targetJID, err := buildRecipientJID(to)
+	targetJID, err := resolveRecipient(ctx, cli, to)
 	if err != nil {
-		return fmt.Errorf("failed to parse recipient JID: %w", err)
+		return err
 	}
 
 	uploaded, err := cli.Upload(ctx, fileBytes, whatsmeow.MediaDocument)
 	if err != nil {
 		return fmt.Errorf("failed to upload document: %w", err)
 	}
+
+	sendTypingIndicator(ctx, cli, targetJID)
 
 	payload := &waE2E.Message{
 		DocumentMessage: &waE2E.DocumentMessage{

@@ -138,13 +138,27 @@ Retorno esperado (JSON):
       "vacancy_id": "vac_3f2a...",
       "reason": "Candidato tem experiência em Go e Clean Architecture",
       "contact_type": "email",
-      "contact_target": "rh@empresa.com"
+      "contact_target": "rh@empresa.com",
+      "status": "Enfileirado"
     }
   ],
   "duration_ms": 4210,
   "status": "success"
 }
 ```
+
+> **A resposta não confirma envio.** Os disparos vão para uma fila espaçada em 20 a 40 segundos por canal, para não parecer robô — uma rodada com muitos matches leva minutos. O `status` de cada match nasce `"Enfileirado"` e vira `"Sucesso (enviado)"` ou uma mensagem de erro conforme a fila drena. Para acompanhar:
+>
+> ```bash
+> curl http://localhost:8080/api/v1/matches          # pega o id da execução
+> curl http://localhost:8080/api/v1/matches/<id>     # status atualizado
+> ```
+>
+> A fila vive em memória: um restart do servidor descarta os envios pendentes.
+>
+> O arquivo de execução (`log_<timestamp>.txt`, gravado no diretório de onde o binário roda) é o registro que sobrevive: cada match entra como `Enfileirado` e ganha um bloco `ENVIO CONCLUÍDO` com o desfecho quando a fila drena.
+
+> **Para candidatura por e-mail funcionar, o candidato precisa ter credenciais OAuth2 cadastradas** via `POST /api/v1/credentials` (veja a seção abaixo), e o `candidate_email` da requisição precisa bater com o e-mail cadastrado. Sem isso, todo match cujo contato é e-mail aparece como `Não disparado` — e como boa parte das vagas pede currículo por e-mail, isso costuma ser a maioria deles.
 
 ### Credenciais de E-mail (OAuth2) e WhatsApp
 

@@ -182,10 +182,10 @@ func (s *vacancyStore) AddVacancies(ctx context.Context, vacancies []string, emb
 }
 
 func (s *vacancyStore) SearchSimilarity(ctx context.Context, queryEmbedding []float32, limit int, threshold float32) ([]domain.Vacancy, error) {
-	log.Printf("[VacancyStore] Buscando as %d vagas mais similares (threshold=%.2f)...", limit, threshold)
-
-	if limit <= 0 {
-		limit = 10
+	if limit > 0 {
+		log.Printf("[VacancyStore] Buscando as %d vagas mais similares (threshold=%.2f)...", limit, threshold)
+	} else {
+		log.Printf("[VacancyStore] Buscando todas as vagas acima do threshold=%.2f...", threshold)
 	}
 
 	rows, err := s.db.QueryContext(ctx, `SELECT id, text, embedding FROM vacancies;`)
@@ -223,7 +223,10 @@ func (s *vacancyStore) SearchSimilarity(ctx context.Context, queryEmbedding []fl
 	sort.SliceStable(candidates, func(i, j int) bool {
 		return candidates[i].Score > candidates[j].Score
 	})
-	if len(candidates) > limit {
+	// limit <= 0 significa sem limite: como o embedding discrimina pouco entre
+	// textos do mesmo assunto, cortar em N seria um corte arbitrário. Quem filtra
+	// aptidão de verdade é a LLM, adiante no fluxo.
+	if limit > 0 && len(candidates) > limit {
 		candidates = candidates[:limit]
 	}
 	for i := range candidates {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"api/internal/domain"
@@ -256,10 +257,19 @@ func TestOrchestrator_Methods(t *testing.T) {
 			},
 		}
 
-		emailCalls := 0
+		// Os envios acontecem em goroutines do dispatcher, então os contadores
+		// precisam ser atômicos e só podem ser lidos depois do stop().
+		//
+		// release trava os dois mocks de envio até o teste liberar. É o que torna
+		// determinística a asserção central desta mudança: MatchResume tem que
+		// retornar com os disparos ainda pendentes.
+		release := make(chan struct{})
+
+		var emailCalls atomic.Int32
 		mEmail := &mockEmail{
 			sendFn: func(ctx context.Context, to string, subject string, body string, attachmentB64 string, attachmentName string) error {
-				emailCalls++
+				<-release
+				emailCalls.Add(1)
 				if to != "rh@empresa.com" || attachmentB64 != "aGVsbG8=" {
 					t.Errorf("unexpected email call parameters: to=%s, b64=%s", to, attachmentB64)
 				}
@@ -267,10 +277,11 @@ func TestOrchestrator_Methods(t *testing.T) {
 			},
 		}
 
-		waCalls := 0
+		var waCalls atomic.Int32
 		mWhatsApp := &mockWhatsApp{
 			docFn: func(ctx context.Context, phoneSender string, to string, caption string, fileBytes []byte, filename string) error {
-				waCalls++
+				<-release
+				waCalls.Add(1)
 				if phoneSender != "5511888888888" || to != "5511999999999" {
 					t.Errorf("unexpected whatsapp call parameters: sender=%s, to=%s", phoneSender, to)
 				}
@@ -300,11 +311,40 @@ func TestOrchestrator_Methods(t *testing.T) {
 			t.Errorf("match deve carregar o ID da vaga pré-filtrada, got %q e %q",
 				res.Matches[0].VacancyID, res.Matches[1].VacancyID)
 		}
-		if emailCalls != 1 {
-			t.Errorf("expected 1 email call, got: %d", emailCalls)
+
+		// O contrato desta mudança: MatchResume retorna sem esperar o envio. Como os
+		// mocks estão travados em <-release, nenhum disparo pode ter concluído.
+		for i, m := range res.Matches {
+			if m.Status != "Enfileirado" {
+				t.Errorf("match %d deve voltar como Enfileirado, got %q", i, m.Status)
+			}
 		}
-		if waCalls != 1 {
-			t.Errorf("expected 1 whatsapp call, got: %d", waCalls)
+		if got := emailCalls.Load() + waCalls.Load(); got != 0 {
+			t.Errorf("nenhum envio pode ter acontecido antes do release, got %d", got)
+		}
+
+		// Libera os envios e drena as filas: só depois disso os contadores têm valor
+		// definido.
+		close(release)
+		orch.dispatcher.stop()
+
+		if got := emailCalls.Load(); got != 1 {
+			t.Errorf("expected 1 email call, got: %d", got)
+		}
+		if got := waCalls.Load(); got != 1 {
+			t.Errorf("expected 1 whatsapp call, got: %d", got)
+		}
+
+		// Depois do envio o histórico precisa refletir o desfecho real, não o
+		// "Enfileirado" que o handler já tinha devolvido.
+		records, err := orch.ListMatches(context.Background())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for _, m := range records[0].Result.Matches {
+			if m.Status != "Sucesso (enviado)" {
+				t.Errorf("status no histórico deve virar sucesso após o envio, got %q", m.Status)
+			}
 		}
 	})
 
@@ -353,8 +393,13 @@ func TestOrchestrator_Methods(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error getting match: %v", err)
 		}
-		if got.Result != res {
-			t.Errorf("expected GetMatch to return the same result recorded by MatchResume")
+		// GetMatch devolve cópia, não o ponteiro vivo — o dispatcher continua
+		// escrevendo status no original. Então compara-se o conteúdo.
+		if got.Result == res {
+			t.Error("GetMatch deve devolver uma cópia, não o result vivo que o dispatcher muta")
+		}
+		if got.Result.Status != res.Status || len(got.Result.Matches) != len(res.Matches) {
+			t.Errorf("cópia divergiu do original: %+v vs %+v", got.Result, res)
 		}
 
 		if err := orch.DeleteMatch(context.Background(), id); err != nil {

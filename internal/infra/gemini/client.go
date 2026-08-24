@@ -33,7 +33,7 @@ func NewGeminiClient(apiKey, model string) domain.GeminiService {
 		model:  model,
 		apiURL: "https://generativelanguage.googleapis.com/v1beta",
 		httpClient: &http.Client{
-			Timeout: 45 * time.Second,
+			Timeout: 5 * time.Minute,
 		},
 	}
 }
