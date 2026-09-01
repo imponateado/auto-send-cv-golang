@@ -10,6 +10,10 @@ import (
 type Match struct {
 	Index         int    `json:"index"`
 	VacancyID     string `json:"vacancy_id"`
+	// Role é o cargo da vaga, como escrito no anúncio. É o único texto vindo da
+	// LLM que chega ao recrutador, então o prompt pede uma transcrição, não uma
+	// interpretação.
+	Role          string `json:"role"`
 	Reason        string `json:"reason"`
 	ContactType   string `json:"contact_type"`
 	ContactTarget string `json:"contact_target"`

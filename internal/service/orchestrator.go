@@ -557,10 +557,72 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 	return &returned, nil
 }
 
+// messageTZ é o fuso que decide a saudação da mensagem. O default é Brasil
+// porque o resto do fluxo já assume isso (o prompt exige DDI 55); o TZ do
+// sistema não serve de default porque em container ele costuma ser UTC, e a
+// saudação sairia três horas adiantada.
+var messageTZ = loadMessageTZ()
+
+func loadMessageTZ() *time.Location {
+	name := os.Getenv("MESSAGE_TZ")
+	if name == "" {
+		name = "America/Sao_Paulo"
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		log.Printf("[Orchestrator] MESSAGE_TZ %q inválido (%v), usando o fuso do sistema", name, err)
+		return time.Local
+	}
+	return loc
+}
+
+// greeting devolve a saudação da hora do dia.
+func greeting(t time.Time) string {
+	switch h := t.In(messageTZ).Hour(); {
+	case h < 5, h >= 18:
+		return "Boa noite"
+	case h < 12:
+		return "Bom dia"
+	default:
+		return "Boa tarde"
+	}
+}
+
+// sanitizeRole normaliza o cargo vindo da LLM antes de ele virar assunto de
+// e-mail e corpo de mensagem: uma linha só e curto o bastante para caber num
+// assunto.
+func sanitizeRole(role string) string {
+	role = strings.Join(strings.Fields(role), " ")
+	if r := []rune(role); len(r) > 80 {
+		role = strings.TrimSpace(string(r[:80]))
+	}
+	return role
+}
+
+// applicationMessage é a mensagem que o recrutador recebe, a mesma nos dois
+// canais. O motivo do match não entra: é raciocínio interno da LLM, escrito para
+// o log, não para quem vai ler a candidatura.
+func applicationMessage(role string, now time.Time) string {
+	vaga := "à vaga divulgada"
+	if role != "" {
+		vaga = "à vaga de " + role
+	}
+	return fmt.Sprintf("%s,\n\nCandidato-me %s. Currículo em anexo para avaliação.", greeting(now), vaga)
+}
+
+func applicationSubject(role string) string {
+	if role == "" {
+		return "Candidatura"
+	}
+	return "Candidatura - " + role
+}
+
 // buildDispatchJob monta o job de envio de match. Devolve status não-vazio
 // quando o disparo nem chega a ser enfileirado — falta de credencial, de
 // telefone ou canal desconhecido.
 func (o *orchestrator) buildDispatchJob(match domain.Match, emailService domain.EmailService, emailUnavailable, candidatePhone, fileB64 string) (dispatchJob, string) {
+	role := sanitizeRole(match.Role)
+
 	switch match.ContactType {
 	case channelEmail:
 		if emailService == nil {
@@ -571,11 +633,10 @@ func (o *orchestrator) buildDispatchJob(match domain.Match, emailService domain.
 			Target:       match.ContactTarget,
 			VacancyID:    match.VacancyID,
 			EmailService: emailService,
-			Subject:      "Candidatura - Processamento Automático",
-			Body: fmt.Sprintf("Olá,\n\nEstou me candidatando à sua vaga de emprego.\n\nMotivo da compatibilidade:\n%s\n\n"+
-				"Em anexo, envio meu currículo para avaliação.\n\nAtenciosamente,\nCandidato", match.Reason),
-			FileB64:  fileB64,
-			Filename: "curriculo.pdf",
+			Subject:      applicationSubject(role),
+			Body:         applicationMessage(role, time.Now()),
+			FileB64:      fileB64,
+			Filename:     "curriculo.pdf",
 		}, ""
 
 	case channelWhatsApp:
@@ -587,10 +648,9 @@ func (o *orchestrator) buildDispatchJob(match domain.Match, emailService domain.
 			Target:      match.ContactTarget,
 			VacancyID:   match.VacancyID,
 			SenderPhone: candidatePhone,
-			Body: fmt.Sprintf("Olá!\n\nEstou me candidatando à sua vaga de emprego.\n\n*Motivo do Match:*\n%s\n\n"+
-				"Em anexo, envio meu currículo para avaliação.", match.Reason),
-			FileB64:  fileB64,
-			Filename: "curriculo.pdf",
+			Body:        applicationMessage(role, time.Now()),
+			FileB64:     fileB64,
+			Filename:    "curriculo.pdf",
 		}, ""
 
 	default:

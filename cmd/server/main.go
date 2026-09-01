@@ -9,6 +9,9 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	// tzdata embutido: a saudação da mensagem depende do fuso de Brasília, e
+	// imagem enxuta não costuma trazer o banco de fusos do sistema.
+	_ "time/tzdata"
 
 	"api/internal/config"
 	"api/internal/domain"

@@ -104,7 +104,7 @@ func (c *geminiClient) MatchResume(ctx context.Context, fileB64 string, fileMime
 	builder.WriteString("Abaixo está o currículo de um candidato (em anexo) e uma lista de vagas de emprego.\n")
 	builder.WriteString("Analise o currículo e compare-o com cada uma das vagas.\n")
 	builder.WriteString("Retorne no formato JSON estruturado quais vagas dão match com o candidato.\n")
-	builder.WriteString("Para cada match, identifique: o index da vaga na lista, o motivo, o canal de contato ('email' ou 'whatsapp') e o email ou telefone de destino indicado no texto da vaga.\n")
+	builder.WriteString("Para cada match, identifique: o index da vaga na lista, o cargo, o motivo, o canal de contato ('email' ou 'whatsapp') e o email ou telefone de destino indicado no texto da vaga.\n")
 	builder.WriteString("Se o canal de contato for 'whatsapp', o contact_target deve conter APENAS dígitos, incluindo o código do país do Brasil (55) antes do DDD, sem parênteses, espaços ou hífens (ex: \"(61) 99205-5310\" vira \"5561992055310\").\n\n")
 	builder.WriteString("Lista de Vagas:\n")
 	for i, v := range vacancies {
@@ -137,11 +137,15 @@ func (c *geminiClient) MatchResume(ctx context.Context, fileB64 string, fileMime
 						Type: "ARRAY",
 						Items: &responseSchema{
 							Type:     "OBJECT",
-							Required: []string{"index", "reason", "contact_type", "contact_target"},
+							Required: []string{"index", "role", "reason", "contact_type", "contact_target"},
 							Properties: map[string]schemaProperty{
 								"index": {
 									Type:        "INTEGER",
 									Description: "Índice numérico da vaga que deu match na lista recebida (iniciando em 0)",
+								},
+								"role": {
+									Type:        "STRING",
+									Description: "Cargo da vaga, copiado do anúncio, sem inventar nem reescrever (ex: \"Desenvolvedor Backend Java\"). Vai literalmente na mensagem enviada ao recrutador. Se o anúncio não disser o cargo, retornar string vazia",
 								},
 								"reason": {
 									Type:        "STRING",
