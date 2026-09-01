@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,6 +44,7 @@ type GroupWatcher struct {
 	repo         domain.GroupWatchRepository
 	waManager    *whatsapp.WhatsMeowManager
 	orchestrator domain.Orchestrator
+	llm          domain.GeminiService
 
 	debounceDelay time.Duration
 	debounceMu    sync.Mutex
@@ -69,7 +72,7 @@ type GroupWatcher struct {
 	lastFlushDay time.Time
 }
 
-func NewGroupWatcher(repo domain.GroupWatchRepository, waManager *whatsapp.WhatsMeowManager, orchestrator domain.Orchestrator) *GroupWatcher {
+func NewGroupWatcher(repo domain.GroupWatchRepository, waManager *whatsapp.WhatsMeowManager, orchestrator domain.Orchestrator, llm domain.GeminiService) *GroupWatcher {
 	delay := debounceDelayFromEnv()
 	log.Printf("[GroupWatcher] Flush automático após %s de silêncio no grupo.", delay)
 
@@ -77,6 +80,7 @@ func NewGroupWatcher(repo domain.GroupWatchRepository, waManager *whatsapp.Whats
 		repo:          repo,
 		waManager:     waManager,
 		orchestrator:  orchestrator,
+		llm:           llm,
 		debounceDelay: delay,
 	}
 }
@@ -171,6 +175,10 @@ func (s *GroupWatcher) FlushNow(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
+	// OCR das imagens antes de indexar. Escreve de volta em msgs[i].Text para que
+	// o arquivamento guarde exatamente o texto que virou vaga.
+	s.ocrPending(ctx, msgs)
+
 	texts := make([]string, len(msgs))
 	for i, msg := range msgs {
 		texts[i] = msg.Text
@@ -206,6 +214,42 @@ func (s *GroupWatcher) FlushNow(ctx context.Context) (int, error) {
 
 	s.recordRun(count, nil)
 	return count, nil
+}
+
+// ocrMinInterval espaça as chamadas de OCR. O free tier do Gemini são 10
+// requisições por minuto; sem intervalo a rajada toma 429 e todo print falha.
+// Este caminho já é assíncrono — só roda depois do debounce, sem ninguém
+// esperando HTTP — então minutos aqui não custam nada. Em tier pago pode ir a 0.
+const ocrMinInterval = 6 * time.Second
+
+// ocrPending transcreve as imagens da rajada e concatena o resultado na legenda,
+// escrevendo em msgs[i].Text. Falha de uma imagem não interrompe o flush: loga e
+// segue com a legenda, e se não sobrar texto o PopulateVacancyTexts já descarta
+// string vazia.
+func (s *GroupWatcher) ocrPending(ctx context.Context, msgs []domain.BufferedMessage) {
+	if s.llm == nil {
+		return
+	}
+
+	first := true
+	for i := range msgs {
+		if len(msgs[i].Image) == 0 {
+			continue
+		}
+		if !first {
+			time.Sleep(ocrMinInterval)
+		}
+		first = false
+
+		b64 := base64.StdEncoding.EncodeToString(msgs[i].Image)
+		text, err := s.llm.ExtractText(ctx, b64, msgs[i].ImageMime)
+		if err != nil {
+			log.Printf("[GroupWatcher] OCR falhou na mensagem %s: %v", msgs[i].MessageID, err)
+			continue
+		}
+
+		msgs[i].Text = strings.TrimSpace(msgs[i].Text + "\n" + text)
+	}
 }
 
 func (s *GroupWatcher) recordRun(count int, err error) {

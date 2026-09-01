@@ -39,8 +39,8 @@ func NewGeminiClient(apiKey, model string) domain.GeminiService {
 }
 
 type geminiRequest struct {
-	Contents         []content        `json:"contents"`
-	GenerationConfig generationConfig `json:"generationConfig"`
+	Contents         []content         `json:"contents"`
+	GenerationConfig *generationConfig `json:"generationConfig,omitempty"`
 }
 
 type content struct {
@@ -127,7 +127,7 @@ func (c *geminiClient) MatchResume(ctx context.Context, fileB64 string, fileMime
 				},
 			},
 		},
-		GenerationConfig: generationConfig{
+		GenerationConfig: &generationConfig{
 			ResponseMimeType: "application/json",
 			ResponseSchema: responseSchema{
 				Type:     "OBJECT",
@@ -227,6 +227,81 @@ func (c *geminiClient) GetEmbeddings(ctx context.Context, texts []string) ([][]f
 	return nil, fmt.Errorf("gemini embedding is deprecated in this project. Please configure Ollama as the embedding provider")
 }
 
+// ExtractText extrai texto de um documento. Imagem vai para o OCR multimodal do
+// Gemini; PDF e texto puro continuam no parser local, que não custa chamada de API.
 func (c *geminiClient) ExtractText(ctx context.Context, fileB64 string, fileMime string) (string, error) {
+	if strings.HasPrefix(fileMime, "image/") {
+		return c.ocrImage(ctx, fileB64, fileMime)
+	}
 	return pdf.ExtractTextFromBase64(fileB64, fileMime)
+}
+
+// ocrPrompt pede transcrição, não interpretação: o texto lido vira uma vaga que
+// será indexada e mandada a uma LLM depois, então campo inventado aqui contamina
+// tudo que vem a jusante — inclusive o contato para onde a candidatura é disparada.
+const ocrPrompt = `Transcreva TODO o texto visível nesta imagem, que é o anúncio de uma vaga de emprego publicado em um grupo de WhatsApp.
+Copie literalmente: cargo, requisitos, local, salário e principalmente o e-mail ou telefone de contato para candidatura.
+Não resuma, não interprete e não complete o que não está escrito.
+Se a imagem não contiver texto legível, responda com uma string vazia.`
+
+// ocrImage manda a imagem ao Gemini e devolve o texto transcrito. Usa o mesmo
+// endpoint do MatchResume, sem responseSchema: aqui a resposta é texto puro.
+func (c *geminiClient) ocrImage(ctx context.Context, fileB64 string, fileMime string) (string, error) {
+	if c.apiKey == "" {
+		return "", fmt.Errorf("gemini client is misconfigured: api key is required")
+	}
+
+	if idx := strings.Index(fileB64, ","); idx != -1 {
+		fileB64 = fileB64[idx+1:]
+	}
+	fileB64 = strings.Join(strings.Fields(fileB64), "")
+
+	reqPayload := geminiRequest{
+		Contents: []content{
+			{
+				Parts: []part{
+					{InlineData: &inlineData{MimeType: fileMime, Data: fileB64}},
+					{Text: ocrPrompt},
+				},
+			},
+		},
+	}
+
+	jsonBytes, err := json.Marshal(reqPayload)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal gemini ocr request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/models/%s:generateContent", c.apiURL, c.model)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBytes))
+	if err != nil {
+		return "", fmt.Errorf("failed to create http request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", c.apiKey)
+
+	log.Printf("[GeminiClient] OCR: enviando imagem %s (payload de %d bytes)...", fileMime, len(jsonBytes))
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("http request to gemini failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBytes, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("gemini api returned status code %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	var geminiRes geminiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&geminiRes); err != nil {
+		return "", fmt.Errorf("failed to decode gemini response: %w", err)
+	}
+
+	if len(geminiRes.Candidates) == 0 || len(geminiRes.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("gemini returned an empty response")
+	}
+
+	text := strings.TrimSpace(geminiRes.Candidates[0].Content.Parts[0].Text)
+	log.Printf("[GeminiClient] OCR: %d caracteres transcritos.", len(text))
+	return text, nil
 }

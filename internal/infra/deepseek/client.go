@@ -180,5 +180,8 @@ func (c *deepseekClient) GetEmbeddings(ctx context.Context, texts []string) ([][
 }
 
 func (c *deepseekClient) ExtractText(ctx context.Context, fileB64 string, fileMime string) (string, error) {
+	if strings.HasPrefix(fileMime, "image/") {
+		return "", fmt.Errorf("deepseek não suporta OCR de imagem (%s)", fileMime)
+	}
 	return pdf.ExtractTextFromBase64(fileB64, fileMime)
 }

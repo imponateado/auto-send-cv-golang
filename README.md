@@ -5,7 +5,7 @@ Uma API REST em Go, com **Clean Architecture**, que monitora grupos de WhatsApp 
 ## Como funciona
 
 1. Um watcher escuta os grupos de WhatsApp monitorados e acumula as mensagens em memória.
-2. Após 10 minutos de silêncio no grupo, o lote inteiro é processado: cada mensagem vira uma vaga, com embedding gerado localmente pelo Ollama.
+2. Após 10 minutos de silêncio no grupo, o lote inteiro é processado: cada mensagem vira uma vaga, com embedding gerado localmente pelo Ollama. Vaga postada como imagem entra pela legenda e pelo texto do print, transcrito por OCR no Gemini.
 3. No `POST /api/v1/match`, o currículo é vetorizado e comparado por similaridade de cosseno contra as vagas do dia.
 4. As vagas que passam do threshold vão para uma LLM (Gemini ou DeepSeek), que confirma os matches e extrai o canal de contato.
 5. Para cada match confirmado, a candidatura é disparada com o currículo em anexo.
@@ -19,7 +19,7 @@ As vagas são descartadas no primeiro flush de cada novo dia.
 - **`internal/domain/`**: Entidades e contratos — `Vacancy`, `Match`, `Orchestrator`, `VectorStore`, `GroupWatchRepository`.
 - **`internal/service/`**: Regra de negócio — o `orchestrator` (indexação e match) e o `GroupWatcher` (buffer e debounce das mensagens de grupo).
 - **`internal/handler/`**: Controladores HTTP, middlewares de logging, recuperação de pânico e CORS.
-- **`internal/infra/`**: Implementações concretas — SQLite (credenciais, grupos, mensagens e vagas), whatsmeow (sessão do WhatsApp), Gemini/DeepSeek (LLM), Ollama (embeddings), OAuth2 (Gmail e Microsoft Graph) e extração de texto de PDF.
+- **`internal/infra/`**: Implementações concretas — SQLite (credenciais, grupos, mensagens e vagas), whatsmeow (sessão do WhatsApp), Gemini/DeepSeek (LLM), Ollama (embeddings), OAuth2 (Gmail e Microsoft Graph) e extração de texto de PDF. O OCR das vagas em imagem reusa o cliente do Gemini, sem dependência nova.
 
 ### Armazenamento
 

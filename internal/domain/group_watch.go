@@ -24,6 +24,9 @@ type BufferedMessage struct {
 	SenderJID  string
 	Text       string
 	ReceivedAt time.Time
+
+	Image     []byte
+	ImageMime string
 }
 
 type GroupWatchRepository interface {

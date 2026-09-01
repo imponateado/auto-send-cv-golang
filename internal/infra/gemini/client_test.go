@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -61,6 +62,39 @@ func TestGeminiClient_MatchResume(t *testing.T) {
 		match := res.Matches[0]
 		if match.Index != 0 || match.ContactType != "email" || match.ContactTarget != "rh@empresa.com" {
 			t.Errorf("unexpected match results: %+v", match)
+		}
+	})
+}
+
+func TestGeminiClient_ExtractText(t *testing.T) {
+	t.Run("imagem vai para o OCR", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"VAGA: Dev Go\ncontato: rh@empresa.com"}]}}]}`))
+		}))
+		defer server.Close()
+
+		cli := &geminiClient{apiKey: "k", model: "m", apiURL: server.URL, httpClient: server.Client()}
+
+		got, err := cli.ExtractText(context.Background(), "aGVsbG8=", "image/jpeg")
+		if err != nil {
+			t.Fatalf("expected no error, got: %v", err)
+		}
+		if !strings.Contains(got, "rh@empresa.com") {
+			t.Errorf("expected transcribed text, got: %q", got)
+		}
+	})
+
+	// O caminho do PDF não pode ter passado a custar chamada de API.
+	t.Run("pdf nao chama a api", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("ExtractText não deveria chamar a API para application/pdf")
+		}))
+		defer server.Close()
+
+		cli := &geminiClient{apiKey: "k", model: "m", apiURL: server.URL, httpClient: server.Client()}
+
+		if _, err := cli.ExtractText(context.Background(), "bm90IGEgcGRm", "application/pdf"); err == nil {
+			t.Fatal("expected pdf parse error for garbage input")
 		}
 	})
 }

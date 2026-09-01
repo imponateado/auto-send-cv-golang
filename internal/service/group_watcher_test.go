@@ -87,7 +87,7 @@ func (m *mockOrchestrator) DeleteMatch(ctx context.Context, id string) error {
 func TestGroupWatcherDebounce(t *testing.T) {
 	repo := &mockGroupWatchRepo{}
 	orch := &mockOrchestrator{}
-	gw := NewGroupWatcher(repo, nil, orch)
+	gw := NewGroupWatcher(repo, nil, orch, nil)
 	gw.debounceDelay = 20 * time.Millisecond
 
 	gw.onMessage("phone", domain.BufferedMessage{MessageID: "1", Phone: "p", Text: "hello", ReceivedAt: time.Now()})
@@ -106,7 +106,7 @@ func TestGroupWatcherDebounce(t *testing.T) {
 func TestGroupWatcherDebounceResetOnNewMessage(t *testing.T) {
 	repo := &mockGroupWatchRepo{}
 	orch := &mockOrchestrator{}
-	gw := NewGroupWatcher(repo, nil, orch)
+	gw := NewGroupWatcher(repo, nil, orch, nil)
 	gw.debounceDelay = 30 * time.Millisecond
 
 	gw.onMessage("phone", domain.BufferedMessage{MessageID: "1", Phone: "p", Text: "a", ReceivedAt: time.Now()})
@@ -125,7 +125,7 @@ func TestGroupWatcherDebounceResetOnNewMessage(t *testing.T) {
 
 func TestGroupWatcherListWatchedPhones(t *testing.T) {
 	repo := &mockGroupWatchRepo{phones: []string{"5511999999999", "5511888888888"}}
-	gw := NewGroupWatcher(repo, nil, &mockOrchestrator{})
+	gw := NewGroupWatcher(repo, nil, &mockOrchestrator{}, nil)
 
 	got, err := gw.ListWatchedPhones(context.Background())
 	if err != nil {
@@ -139,7 +139,7 @@ func TestGroupWatcherListWatchedPhones(t *testing.T) {
 func TestFlushNowClearVacanciesOncePerDay(t *testing.T) {
 	repo := &mockGroupWatchRepo{}
 	orch := &mockOrchestrator{}
-	gw := NewGroupWatcher(repo, nil, orch)
+	gw := NewGroupWatcher(repo, nil, orch, nil)
 
 	gw.onMessage("p", domain.BufferedMessage{MessageID: "1", Phone: "p", Text: "vaga A"})
 	if _, err := gw.FlushNow(context.Background()); err != nil {
@@ -164,7 +164,7 @@ func TestFlushNowClearVacanciesOncePerDay(t *testing.T) {
 func TestFlushNowKeepsMessagesInBufferWhenPopulateFails(t *testing.T) {
 	repo := &mockGroupWatchRepo{}
 	orch := &mockOrchestrator{populateErr: errors.New("ollama fora do ar")}
-	gw := NewGroupWatcher(repo, nil, orch)
+	gw := NewGroupWatcher(repo, nil, orch, nil)
 
 	gw.onMessage("p", domain.BufferedMessage{MessageID: "1", Phone: "p", Text: "vaga A"})
 
@@ -197,7 +197,7 @@ func TestFlushNowKeepsMessagesInBufferWhenPopulateFails(t *testing.T) {
 func TestOnMessageIgnoresDuplicateMessageID(t *testing.T) {
 	repo := &mockGroupWatchRepo{}
 	orch := &mockOrchestrator{}
-	gw := NewGroupWatcher(repo, nil, orch)
+	gw := NewGroupWatcher(repo, nil, orch, nil)
 
 	msg := domain.BufferedMessage{MessageID: "1", Phone: "p", Text: "vaga A"}
 	gw.onMessage("p", msg)
@@ -209,5 +209,51 @@ func TestOnMessageIgnoresDuplicateMessageID(t *testing.T) {
 	}
 	if status.PendingCount != 1 {
 		t.Errorf("mensagem repetida não pode entrar duas vezes, buffer tem %d", status.PendingCount)
+	}
+}
+
+func TestFlushNowOCRsImageMessages(t *testing.T) {
+	repo := &mockGroupWatchRepo{}
+	orch := &mockOrchestrator{}
+	llm := &mockGemini{extractTextFn: func(ctx context.Context, fileB64, fileMime string) (string, error) {
+		return "VAGA: Dev Go", nil
+	}}
+	gw := NewGroupWatcher(repo, nil, orch, llm)
+
+	gw.pending = []domain.BufferedMessage{
+		{MessageID: "1", Image: []byte{0xFF, 0xD8}, ImageMime: "image/jpeg"},
+	}
+
+	if _, err := gw.FlushNow(context.Background()); err != nil {
+		t.Fatalf("flush falhou: %v", err)
+	}
+
+	// O texto do OCR precisa chegar ao arquivamento, não só à indexação.
+	if got := repo.archived[0].Text; got != "VAGA: Dev Go" {
+		t.Errorf("esperava texto do OCR arquivado, veio %q", got)
+	}
+}
+
+func TestFlushNowSurvivesOCRFailure(t *testing.T) {
+	repo := &mockGroupWatchRepo{}
+	orch := &mockOrchestrator{}
+	llm := &mockGemini{extractTextFn: func(ctx context.Context, fileB64, fileMime string) (string, error) {
+		return "", errors.New("429 rate limit")
+	}}
+	gw := NewGroupWatcher(repo, nil, orch, llm)
+
+	gw.pending = []domain.BufferedMessage{
+		{MessageID: "1", Image: []byte{0xFF, 0xD8}, ImageMime: "image/jpeg", Text: "legenda"},
+		{MessageID: "2", Text: "vaga em texto"},
+	}
+
+	if _, err := gw.FlushNow(context.Background()); err != nil {
+		t.Fatalf("OCR falhando não pode derrubar o flush: %v", err)
+	}
+	if repo.archivedCount() != 2 {
+		t.Errorf("esperava 2 mensagens arquivadas, veio %d", repo.archivedCount())
+	}
+	if got := repo.archived[0].Text; got != "legenda" {
+		t.Errorf("esperava fallback para a legenda, veio %q", got)
 	}
 }

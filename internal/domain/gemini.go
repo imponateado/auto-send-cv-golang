@@ -8,8 +8,8 @@ import (
 // lista que foi enviada à LLM; VacancyID é preenchido pelo orchestrator a partir
 // desse índice e é o que identifica a vaga de verdade.
 type Match struct {
-	Index         int    `json:"index"`
-	VacancyID     string `json:"vacancy_id"`
+	Index     int    `json:"index"`
+	VacancyID string `json:"vacancy_id"`
 	// Role é o cargo da vaga, como escrito no anúncio. É o único texto vindo da
 	// LLM que chega ao recrutador, então o prompt pede uma transcrição, não uma
 	// interpretação.

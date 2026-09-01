@@ -34,8 +34,13 @@ func TestExtractText(t *testing.T) {
 			want: "vaga com link",
 		},
 		{
+			name: "image caption",
+			msg:  &waE2E.Message{ImageMessage: &waE2E.ImageMessage{Caption: proto.String("vaga em print")}},
+			want: "vaga em print",
+		},
+		{
 			name: "neither present",
-			msg:  &waE2E.Message{ImageMessage: &waE2E.ImageMessage{Caption: proto.String("legenda ignorada")}},
+			msg:  &waE2E.Message{ImageMessage: &waE2E.ImageMessage{}},
 			want: "",
 		},
 	}

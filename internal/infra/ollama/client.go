@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"api/internal/domain"
@@ -107,5 +108,8 @@ func (c *ollamaClient) GetEmbeddings(ctx context.Context, texts []string) ([][]f
 }
 
 func (c *ollamaClient) ExtractText(ctx context.Context, fileB64 string, fileMime string) (string, error) {
+	if strings.HasPrefix(fileMime, "image/") {
+		return "", fmt.Errorf("ollama não suporta OCR de imagem (%s)", fileMime)
+	}
 	return pdf.ExtractTextFromBase64(fileB64, fileMime)
 }

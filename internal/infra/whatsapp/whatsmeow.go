@@ -24,6 +24,14 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const (
+	// maxOCRImageBytes é o teto para baixar uma imagem de grupo. Acima disso o
+	// payload inline não caberia bem na requisição do Gemini de qualquer forma.
+	maxOCRImageBytes = 5 << 20
+
+	mediaDownloadTimeout = 2 * time.Minute
+)
+
 type WhatsMeowManager struct {
 	container       *sqlstore.Container
 	clients         map[string]*whatsmeow.Client
@@ -302,18 +310,50 @@ func (m *WhatsMeowManager) WatchGroups(ctx context.Context, phone string, watche
 		if !watchedSet[v.Info.Chat.String()] {
 			return
 		}
-		text := extractText(v.Message)
-		if text == "" {
-			return
-		}
-		onMessage(phone, domain.BufferedMessage{
+
+		msg := domain.BufferedMessage{
 			MessageID:  v.Info.ID,
 			Phone:      phone,
 			GroupJID:   v.Info.Chat.String(),
 			SenderJID:  v.Info.Sender.String(),
-			Text:       text,
+			Text:       extractText(v.Message),
 			ReceivedAt: v.Info.Timestamp,
-		})
+		}
+
+		// Vaga postada como print: a legenda já foi para msg.Text e a imagem vai
+		// junto, para o OCR acontecer no flush. O download é rede e isto roda dentro
+		// do dispatch de eventos do whatsmeow, então sai numa goroutine.
+		//
+		// ponytail: uma goroutine por imagem, sem teto de concorrência — o teto real
+		// é o nº de imagens da rajada (dezenas). Upgrade path: semáforo com buffer.
+		//
+		// Imagem acima do teto cai fora do if e segue pelo caminho de texto, onde a
+		// legenda sozinha ainda vira vaga.
+		if img := v.Message.GetImageMessage(); img != nil && img.GetFileLength() <= maxOCRImageBytes {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), mediaDownloadTimeout)
+				defer cancel()
+
+				data, err := cli.Download(ctx, img)
+				if err != nil {
+					log.Printf("[WhatsApp] Falha ao baixar imagem da mensagem %s: %v", msg.MessageID, err)
+					if msg.Text != "" {
+						onMessage(phone, msg) // a legenda sozinha ainda vale uma vaga
+					}
+					return
+				}
+
+				msg.Image = data
+				msg.ImageMime = img.GetMimetype()
+				onMessage(phone, msg)
+			}()
+			return
+		}
+
+		if msg.Text == "" {
+			return
+		}
+		onMessage(phone, msg)
 	})
 	m.groupHandlers[phone] = id
 
@@ -321,13 +361,19 @@ func (m *WhatsMeowManager) WatchGroups(ctx context.Context, phone string, watche
 }
 
 // extractText extrai o texto de uma mensagem do whatsmeow, cobrindo conversas
-// simples e respostas/links formatados. Retorna string vazia se msg for nil ou
-// não tiver texto extraível.
+// simples, respostas/links formatados e a legenda de imagem/documento. Retorna
+// string vazia se msg for nil ou não tiver texto extraível.
 func extractText(msg *waE2E.Message) string {
 	if msg == nil {
 		return ""
 	}
 	if c := msg.GetConversation(); c != "" {
+		return c
+	}
+	if c := msg.GetImageMessage().GetCaption(); c != "" {
+		return c
+	}
+	if c := msg.GetDocumentMessage().GetCaption(); c != "" {
 		return c
 	}
 	return msg.GetExtendedTextMessage().GetText()

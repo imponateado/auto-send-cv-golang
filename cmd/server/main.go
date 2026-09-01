@@ -100,7 +100,7 @@ func main() {
 		waManager,
 	)
 
-	groupWatcher := service.NewGroupWatcher(groupWatchRepo, waManager, matchingOrchestrator)
+	groupWatcher := service.NewGroupWatcher(groupWatchRepo, waManager, matchingOrchestrator, activeLLM)
 	if err := groupWatcher.Bootstrap(context.Background()); err != nil {
 		log.Printf("Warning: failed to bootstrap group watchers: %v", err)
 	}
