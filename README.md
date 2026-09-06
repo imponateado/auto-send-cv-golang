@@ -6,11 +6,12 @@ Uma API REST em Go, com **Clean Architecture**, que monitora grupos de WhatsApp 
 
 1. Um watcher escuta os grupos de WhatsApp monitorados e acumula as mensagens em memória.
 2. Após 10 minutos de silêncio no grupo, o lote inteiro é processado: cada mensagem vira uma vaga, com embedding gerado localmente pelo Ollama. Vaga postada como imagem entra pela legenda e pelo texto do print, transcrito por OCR no Gemini.
-3. No `POST /api/v1/match`, o currículo é vetorizado e comparado por similaridade de cosseno contra as vagas do dia.
-4. As vagas que passam do threshold vão para uma LLM (Gemini ou DeepSeek), que confirma os matches e extrai o canal de contato.
-5. Para cada match confirmado, a candidatura é disparada com o currículo em anexo.
+3. Terminado o flush com vagas novas, o match roda sozinho: para cada currículo salvo em `POST /api/v1/candidates`, o currículo é vetorizado e comparado por similaridade de cosseno contra as vagas do dia. O `POST /api/v1/match` continua existindo para uma rodada avulsa.
+4. Vagas às quais o candidato já se candidatou são descartadas antes da LLM.
+5. As vagas restantes que passam do threshold vão para uma LLM (Gemini ou DeepSeek), que confirma os matches e extrai o canal de contato.
+6. Para cada match confirmado, a candidatura é disparada com o currículo em anexo, e a vaga entra no histórico de candidaturas.
 
-As vagas são descartadas no primeiro flush de cada novo dia.
+As vagas são descartadas no primeiro flush de cada novo dia. O histórico de candidaturas **não**: como o ID da vaga é o sha256 do texto, guardá-lo para sempre é o que impede uma vaga repostada amanhã de gerar uma segunda candidatura. A tabela não é podada (ordem de centenas de linhas por dia).
 
 ## Arquitetura
 
@@ -19,11 +20,11 @@ As vagas são descartadas no primeiro flush de cada novo dia.
 - **`internal/domain/`**: Entidades e contratos — `Vacancy`, `Match`, `Orchestrator`, `VectorStore`, `GroupWatchRepository`.
 - **`internal/service/`**: Regra de negócio — o `orchestrator` (indexação e match) e o `GroupWatcher` (buffer e debounce das mensagens de grupo).
 - **`internal/handler/`**: Controladores HTTP, middlewares de logging, recuperação de pânico e CORS.
-- **`internal/infra/`**: Implementações concretas — SQLite (credenciais, grupos, mensagens e vagas), whatsmeow (sessão do WhatsApp), Gemini/DeepSeek (LLM), Ollama (embeddings), OAuth2 (Gmail e Microsoft Graph) e extração de texto de PDF. O OCR das vagas em imagem reusa o cliente do Gemini, sem dependência nova.
+- **`internal/infra/`**: Implementações concretas — SQLite (credenciais, perfis de candidato, grupos, mensagens e vagas), whatsmeow (sessão do WhatsApp), Gemini/DeepSeek (LLM), Ollama (embeddings), OAuth2 (Gmail e Microsoft Graph) e extração de texto de PDF. O OCR das vagas em imagem reusa o cliente do Gemini, sem dependência nova.
 
 ### Armazenamento
 
-Tudo vive em SQLite, em dois arquivos: `./db/api.db` (credenciais, grupos monitorados, arquivo de mensagens e vagas com seus embeddings) e `./db/whatsapp.db` (sessão do whatsmeow).
+Tudo vive em SQLite, em dois arquivos: `./db/api.db` (credenciais, currículos salvos e histórico de candidaturas, grupos monitorados, arquivo de mensagens e vagas com seus embeddings) e `./db/whatsapp.db` (sessão do whatsmeow).
 
 Os embeddings ficam como `BLOB` e a busca por similaridade é força bruta em Go — varredura linear com cosseno sobre todas as vagas. Para a escala do projeto (centenas de vagas, limpas diariamente) isso custa milissegundos, e dispensa um banco vetorial dedicado.
 
@@ -69,6 +70,14 @@ A API expõe os seguintes endpoints sob `/api/v1`:
 | GET | `/api/v1/matches` | Lista o histórico de execuções de match (em memória) |
 | GET | `/api/v1/matches/{id}` | Consulta um item do histórico de matches |
 | DELETE | `/api/v1/matches/{id}` | Remove um item do histórico de matches |
+
+**Currículo salvo (match automático):**
+
+| Método | Rota | Descrição |
+|---|---|---|
+| POST | `/api/v1/candidates` | Salva o currículo do candidato e liga o match automático |
+| GET | `/api/v1/candidates` | Lista os candidatos com currículo salvo (sem o PDF) |
+| DELETE | `/api/v1/candidates/{id}` | Remove o currículo salvo, desligando o match automático |
 
 **Credenciais de e-mail:**
 
@@ -160,6 +169,33 @@ Retorno esperado (JSON):
 
 > **Para candidatura por e-mail funcionar, o candidato precisa ter credenciais OAuth2 cadastradas** via `POST /api/v1/credentials` (veja a seção abaixo), e o `candidate_email` da requisição precisa bater com o e-mail cadastrado. Sem isso, todo match cujo contato é e-mail aparece como `Não disparado` — e como boa parte das vagas pede currículo por e-mail, isso costuma ser a maioria deles.
 
+### Match Automático
+
+Para não precisar reenviar o currículo a cada lote de vagas, salve-o uma vez:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/candidates \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file_base64": "JVBERi0xLjQK",
+    "email": "candidato@example.com",
+    "phone": "5511999999999",
+    "active": true
+  }'
+```
+
+A partir daí, todo flush que indexa pelo menos uma vaga nova dispara o match em background
+para cada perfil `active`, com o mesmo fluxo do `POST /api/v1/match` — inclusive a fila
+espaçada de disparos. O acompanhamento continua sendo `GET /api/v1/matches` e o
+`log_<timestamp>.txt`.
+
+O `id` do candidato é o e-mail, ou o telefone quando não há e-mail; é ele que indexa o
+histórico de candidaturas. Remover o perfil desliga o automático mas **preserva** esse
+histórico, então recadastrar o currículo não reabre as vagas já disparadas.
+
+> **Ao ligar isso pela primeira vez**, as vagas já indexadas do dia entram todas na
+> primeira rodada. Se não for o que você quer, rode `POST /api/v1/vacancies/clear` antes.
+
 ### Credenciais de E-mail (OAuth2) e WhatsApp
 
 Antes de disparar e-mails automáticos em nome do candidato, registre as credenciais OAuth2 (`google` ou `microsoft`) obtidas via consentimento do usuário:
@@ -198,7 +234,7 @@ Usa a biblioteca [whatsmeow](https://github.com/tulir/whatsmeow) para manter uma
 
 O diretório [`frontend/`](frontend/) contém um cliente web estático — `index.html`, `styles.css` e `app.js`, sem framework, sem build step e sem dependências. Não é embutido no binário do Go; é servido separadamente. Como roda em outra origem, o backend já expõe CORS liberado (`internal/handler/handler.go`) para viabilizar as chamadas.
 
-Cobre os fluxos principais em abas: Vagas (limpar, listar, remover), Match de currículo (upload de PDF), Credenciais de e-mail (OAuth2), WhatsApp (QR code, status, desconexão) e Grupos monitorados (seleção, flush manual, status do buffer).
+Cobre os fluxos principais em abas: Vagas (limpar, listar, remover), Match de currículo (upload de PDF avulso e currículo salvo para o match automático), Credenciais de e-mail (OAuth2), WhatsApp (QR code, status, desconexão) e Grupos monitorados (seleção, flush manual, status do buffer).
 
 ### Rodando
 Abrir o `frontend/index.html` direto no navegador funciona, mas o caminho recomendado é servir por HTTP, para evitar as restrições de `file://`:

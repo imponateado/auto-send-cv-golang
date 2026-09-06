@@ -17,6 +17,9 @@ type Orchestrator interface {
 	ListVacancies(ctx context.Context) ([]Vacancy, error)
 	DeleteVacancy(ctx context.Context, id string) error
 	MatchResume(ctx context.Context, fileB64, fileMime, candidateEmail, candidatePhone string) (*ProcessResult, error)
+	// MatchStoredProfiles roda o match de cada perfil ativo com o currículo já
+	// guardado, sem depender de upload no request.
+	MatchStoredProfiles(ctx context.Context) (int, error)
 	ListMatches(ctx context.Context) ([]*MatchRecord, error)
 	GetMatch(ctx context.Context, id string) (*MatchRecord, error)
 	DeleteMatch(ctx context.Context, id string) error

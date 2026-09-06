@@ -55,6 +55,11 @@ func main() {
 		log.Fatalf("Failed to initialize sqlite group watch database: %v", err)
 	}
 
+	candidateRepo, err := db.NewCandidateRepo(sqlDB)
+	if err != nil {
+		log.Fatalf("Failed to initialize sqlite candidate database: %v", err)
+	}
+
 	waManager, err := whatsapp.NewWhatsMeowManager("./db/whatsapp.db")
 	if err != nil {
 		log.Fatalf("Failed to initialize whatsmeow manager: %v", err)
@@ -97,6 +102,7 @@ func main() {
 		ollamaService,
 		vectorStore,
 		credsRepo,
+		candidateRepo,
 		waManager,
 	)
 
@@ -107,10 +113,11 @@ func main() {
 
 	procHandler := handler.NewProcessorHandler(matchingOrchestrator)
 	credsHandler := handler.NewCredentialsHandler(credsRepo, waManager)
+	candHandler := handler.NewCandidateHandler(candidateRepo)
 	groupHandler := handler.NewGroupWatchHandler(groupWatcher)
 
 	mux := http.NewServeMux()
-	router := handler.RegisterRoutes(mux, procHandler, credsHandler, groupHandler)
+	router := handler.RegisterRoutes(mux, procHandler, credsHandler, candHandler, groupHandler)
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,

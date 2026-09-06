@@ -44,6 +44,7 @@ func (r *mockGroupWatchRepo) archivedCount() int {
 type mockOrchestrator struct {
 	calls       atomic.Int32
 	clears      atomic.Int32
+	autoMatches atomic.Int32
 	populateErr error
 }
 
@@ -70,6 +71,11 @@ func (m *mockOrchestrator) DeleteVacancy(ctx context.Context, id string) error {
 
 func (m *mockOrchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candidateEmail, candidatePhone string) (*domain.ProcessResult, error) {
 	return nil, nil
+}
+
+func (m *mockOrchestrator) MatchStoredProfiles(ctx context.Context) (int, error) {
+	m.autoMatches.Add(1)
+	return 0, nil
 }
 
 func (m *mockOrchestrator) ListMatches(ctx context.Context) ([]*domain.MatchRecord, error) {
@@ -256,4 +262,52 @@ func TestFlushNowSurvivesOCRFailure(t *testing.T) {
 	if got := repo.archived[0].Text; got != "legenda" {
 		t.Errorf("esperava fallback para a legenda, veio %q", got)
 	}
+}
+
+// waitFor espera cond virar true, ou falha. O match automático sai numa
+// goroutine, então não dá para assertar logo depois do FlushNow.
+func waitFor(t *testing.T, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal(msg)
+}
+
+func TestFlushTriggersAutoMatch(t *testing.T) {
+	t.Run("vaga nova dispara o match automático", func(t *testing.T) {
+		orch := &mockOrchestrator{}
+		gw := NewGroupWatcher(&mockGroupWatchRepo{}, nil, orch, nil)
+		gw.pending = []domain.BufferedMessage{{MessageID: "1", Phone: "p", Text: "vaga de dev"}}
+
+		count, err := gw.FlushNow(context.Background())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("expected 1 vacancy indexed, got %d", count)
+		}
+
+		waitFor(t, func() bool { return orch.autoMatches.Load() == 1 },
+			"esperava o flush disparar o match automático, mas ele não rodou")
+	})
+
+	t.Run("flush sem vaga nova não dispara nada", func(t *testing.T) {
+		orch := &mockOrchestrator{}
+		gw := NewGroupWatcher(&mockGroupWatchRepo{}, nil, orch, nil)
+
+		// Buffer vazio: nada a indexar, então nada a que se candidatar.
+		if _, err := gw.FlushNow(context.Background()); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		time.Sleep(50 * time.Millisecond)
+		if got := orch.autoMatches.Load(); got != 0 {
+			t.Fatalf("esperava nenhum match automático sem vaga nova, got %d", got)
+		}
+	})
 }

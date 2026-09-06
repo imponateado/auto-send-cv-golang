@@ -124,11 +124,7 @@ func (h *ProcessorHandler) Match(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	base64Data := req.FileBase64
-	if idx := strings.Index(base64Data, ","); idx != -1 {
-		base64Data = base64Data[idx+1:]
-	}
-	base64Data = strings.Join(strings.Fields(base64Data), "")
+	base64Data := normalizeBase64(req.FileBase64)
 
 	// Disparo de candidatura é efeito colateral externo: uma vez começado, não
 	// pode morrer no meio porque o cliente HTTP desistiu. WithoutCancel mantém os
@@ -219,6 +215,15 @@ func (h *ProcessorHandler) DeleteMatch(w http.ResponseWriter, r *http.Request) {
 		"status":  "success",
 		"message": "Match deleted successfully",
 	})
+}
+
+// normalizeBase64 tira o prefixo "data:application/pdf;base64," que o FileReader
+// do navegador manda e os espaços/quebras de linha, deixando só o payload.
+func normalizeBase64(s string) string {
+	if idx := strings.Index(s, ","); idx != -1 {
+		s = s[idx+1:]
+	}
+	return strings.Join(strings.Fields(s), "")
 }
 
 func respondWithError(w http.ResponseWriter, code int, message string) {

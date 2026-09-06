@@ -61,6 +61,23 @@
       </div>
 
       <div class="card">
+        <h2>Currículo salvo (match automático)</h2>
+        <p>Salve o currículo uma vez e o match roda sozinho a cada lote de vagas novas do watcher, sem reenvio. Vaga já candidatada nunca é disparada de novo.</p>
+        <form id="candidateForm">
+          <label for="candidateFile">Currículo (PDF)</label>
+          <input id="candidateFile" type="file" accept="application/pdf" required>
+          <label for="candidateEmail">Email do candidato</label>
+          <input id="candidateEmail" type="email" placeholder="candidato@email.com">
+          <label for="candidatePhone">Telefone do candidato</label>
+          <input id="candidatePhone" type="text" placeholder="5511999999999">
+          <label><input id="candidateActive" type="checkbox" checked> Match automático ativo</label>
+          <button type="submit">Salvar currículo</button>
+        </form>
+        <button id="candidatesListBtn">Listar currículos salvos</button>
+        <div id="candidateResult" class="result"></div>
+      </div>
+
+      <div class="card">
         <h2>Histórico de matches</h2>
         <button id="matchesListBtn">Listar histórico</button>
         <div id="matchesListResult" class="result"></div>

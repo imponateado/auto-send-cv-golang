@@ -21,11 +21,13 @@ type orchestrator struct {
 	embeddingService domain.GeminiService
 	vectorStore      domain.VectorStore
 	credsRepo        domain.CredentialsRepository
+	candidateRepo    domain.CandidateRepository
 	waManager        domain.WhatsAppManager
 	newEmailService  func(creds *domain.EmailCredentials) domain.EmailService
 	matchesMu        sync.RWMutex
 	matches          map[string]*domain.MatchRecord
 	dispatcher       *dispatcher
+	autoMatchMu      sync.Mutex
 }
 
 func NewOrchestrator(
@@ -33,6 +35,7 @@ func NewOrchestrator(
 	embeddingService domain.GeminiService,
 	vectorStore domain.VectorStore,
 	credsRepo domain.CredentialsRepository,
+	candidateRepo domain.CandidateRepository,
 	waManager domain.WhatsAppManager,
 ) domain.Orchestrator {
 	o := &orchestrator{
@@ -40,6 +43,7 @@ func NewOrchestrator(
 		embeddingService: embeddingService,
 		vectorStore:      vectorStore,
 		credsRepo:        credsRepo,
+		candidateRepo:    candidateRepo,
 		waManager:        waManager,
 		newEmailService: func(creds *domain.EmailCredentials) domain.EmailService {
 			return email.NewOAuthEmailService(creds)
@@ -434,8 +438,32 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 		return nil, fmt.Errorf("failed to search similar vacancies: %w", err)
 	}
 
+	candidateID := domain.ProfileID(candidateEmail, candidatePhone)
+	skipped := 0
+	if candidateID != "" && o.candidateRepo != nil {
+		applied, err := o.candidateRepo.AppliedVacancyIDs(ctx, candidateID)
+		if err != nil {
+			log.Printf("[Orchestrator] Falha ao carregar candidaturas anteriores de %s: %v", candidateID, err)
+			_ = writeExecutionLog(logFilename, start, 0, 0, nil, matchedVacancies, fmt.Sprintf("Erro ao carregar candidaturas anteriores: %v", err))
+			return nil, fmt.Errorf("failed to load applied vacancies: %w", err)
+		}
+
+		kept := matchedVacancies[:0]
+		for _, v := range matchedVacancies {
+			if applied[v.ID] {
+				skipped++
+				continue
+			}
+			kept = append(kept, v)
+		}
+		matchedVacancies = kept
+		if skipped > 0 {
+			log.Printf("[Orchestrator] %d vagas ignoradas: %s já se candidatou a elas.", skipped, candidateID)
+		}
+	}
+
 	if len(matchedVacancies) == 0 {
-		reason := fmt.Sprintf("Nenhuma vaga compatível com o limite de similaridade semântica (threshold: %.2f).", threshold)
+		reason := fmt.Sprintf("Nenhuma vaga nova compatível (threshold: %.2f, %d vagas já candidatadas ignoradas).", threshold, skipped)
 		log.Printf("[Orchestrator] Fim de fluxo precoce: %s", reason)
 		_ = writeExecutionLog(logFilename, start, 0, 0, nil, nil, reason)
 		result := &domain.ProcessResult{
@@ -515,6 +543,7 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 	o.recordMatch(result)
 
 	var dispatchResults []dispatchResult
+	var queuedIDs []string
 	for i := range result.Matches {
 		match := result.Matches[i]
 		log.Printf("[Orchestrator] Enfileirando disparo %d/%d (vaga: %s, contato: %s, destino: %s)", i+1, len(result.Matches), match.VacancyID, match.ContactType, match.ContactTarget)
@@ -541,6 +570,15 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 
 		match.Status = status
 		dispatchResults = append(dispatchResults, dispatchResult{match: match, status: status})
+		if queue {
+			queuedIDs = append(queuedIDs, match.VacancyID)
+		}
+	}
+
+	if candidateID != "" && o.candidateRepo != nil {
+		if err := o.candidateRepo.MarkApplied(ctx, candidateID, queuedIDs); err != nil {
+			log.Printf("[Orchestrator] Falha ao registrar candidaturas de %s: %v", candidateID, err)
+		}
 	}
 
 	err = writeExecutionLog(logFilename, start, int64(len(matchedVacancies)), len(result.Matches), dispatchResults, matchedVacancies, "")
@@ -555,6 +593,62 @@ func (o *orchestrator) MatchResume(ctx context.Context, fileB64, fileMime, candi
 	returned := *result
 	returned.Matches = append([]domain.Match(nil), result.Matches...)
 	return &returned, nil
+}
+
+// MatchStoredProfiles roda o match de cada perfil ativo com o currículo já
+// guardado. É o que o flush chama para se candidatar sozinho, sem ninguém
+// reenviar o PDF. Retorna quantos perfis foram processados; erro só quando nem
+// dá para listar os perfis — falha de um perfil é logada e não interrompe os
+// outros.
+func (o *orchestrator) MatchStoredProfiles(ctx context.Context) (int, error) {
+	if o.candidateRepo == nil {
+		return 0, nil
+	}
+
+	if !o.autoMatchMu.TryLock() {
+		log.Println("[Orchestrator] Match automático já em andamento, pulando esta rodada.")
+		return 0, nil
+	}
+	defer o.autoMatchMu.Unlock()
+
+	profiles, err := o.candidateRepo.ListProfiles(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to list candidate profiles: %w", err)
+	}
+
+	ran := 0
+	for _, p := range profiles {
+		if !p.Active {
+			continue
+		}
+		log.Printf("[Orchestrator] Match automático para o perfil %s...", p.ID)
+		if err := o.matchProfile(ctx, p); err != nil {
+			log.Printf("[Orchestrator] Match automático falhou para %s: %v", p.ID, err)
+			continue
+		}
+		ran++
+	}
+
+	if ran == 0 {
+		log.Println("[Orchestrator] Nenhum perfil ativo com currículo salvo: match automático não rodou.")
+	}
+	return ran, nil
+}
+
+// matchProfile roda o match de um perfil convertendo pânico em erro. O caminho
+// HTTP tem o recoveryMiddleware para isso; este roda numa goroutine solta, onde
+// um pânico derruba o processo inteiro. E ele acontece: o parser de PDF entra em
+// pânico com arquivo malformado, e o currículo aqui vem do banco, salvo há
+// semanas, sem ninguém olhando.
+func (o *orchestrator) matchProfile(ctx context.Context, p domain.CandidateProfile) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("pânico ao processar o currículo de %s: %v", p.ID, r)
+		}
+	}()
+
+	_, err = o.MatchResume(ctx, p.ResumeB64, p.ResumeMime, p.Email, p.Phone)
+	return err
 }
 
 // messageTZ é o fuso que decide a saudação da mensagem. O default é Brasil

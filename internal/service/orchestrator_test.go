@@ -152,7 +152,7 @@ func TestOrchestrator_Methods(t *testing.T) {
 			},
 		}
 
-		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, &mockWhatsApp{})
+		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, nil, &mockWhatsApp{})
 		err := orch.ClearVacancies(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -174,7 +174,7 @@ func TestOrchestrator_Methods(t *testing.T) {
 			},
 		}
 
-		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, &mockWhatsApp{})
+		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, nil, &mockWhatsApp{})
 		count, err := orch.PopulateVacancyTexts(context.Background(), []string{"vaga 1", "vaga 2"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -206,7 +206,7 @@ func TestOrchestrator_Methods(t *testing.T) {
 			},
 		}
 
-		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, &mockWhatsApp{})
+		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, nil, &mockWhatsApp{})
 		count, err := orch.PopulateVacancyTexts(context.Background(), []string{"vaga 1", "vaga 2"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -235,7 +235,7 @@ func TestOrchestrator_Methods(t *testing.T) {
 			},
 		}
 
-		orch := NewOrchestrator(&mockGemini{}, mGemini, mStore, &mockCredsRepo{}, &mockWhatsApp{})
+		orch := NewOrchestrator(&mockGemini{}, mGemini, mStore, &mockCredsRepo{}, nil, &mockWhatsApp{})
 		got, err := orch.ListVacancies(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -292,7 +292,7 @@ func TestOrchestrator_Methods(t *testing.T) {
 			},
 		}
 
-		orch := NewOrchestrator(mGemini, mGemini, &mockVectorStore{}, &mockCredsRepo{}, mWhatsApp).(*orchestrator)
+		orch := NewOrchestrator(mGemini, mGemini, &mockVectorStore{}, &mockCredsRepo{}, nil, mWhatsApp).(*orchestrator)
 		orch.newEmailService = func(creds *domain.EmailCredentials) domain.EmailService {
 			return mEmail
 		}
@@ -357,7 +357,7 @@ func TestOrchestrator_Methods(t *testing.T) {
 			},
 		}
 
-		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, &mockWhatsApp{})
+		orch := NewOrchestrator(&mockGemini{}, &mockGemini{}, mStore, &mockCredsRepo{}, nil, &mockWhatsApp{})
 		if err := orch.DeleteVacancy(context.Background(), "vac_123"); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -373,7 +373,7 @@ func TestOrchestrator_Methods(t *testing.T) {
 			},
 		}
 
-		orch := NewOrchestrator(mGemini, mGemini, &mockVectorStore{}, &mockCredsRepo{}, &mockWhatsApp{})
+		orch := NewOrchestrator(mGemini, mGemini, &mockVectorStore{}, &mockCredsRepo{}, nil, &mockWhatsApp{})
 
 		res, err := orch.MatchResume(context.Background(), "aGVsbG8=", "application/pdf", "", "")
 		if err != nil {

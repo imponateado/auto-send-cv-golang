@@ -213,8 +213,25 @@ func (s *GroupWatcher) FlushNow(ctx context.Context) (int, error) {
 	s.pendingMu.Unlock()
 
 	s.recordRun(count, nil)
+
+	if count > 0 {
+		matchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), autoMatchTimeout)
+		go func() {
+			defer cancel()
+			if _, err := s.orchestrator.MatchStoredProfiles(matchCtx); err != nil {
+				log.Printf("[GroupWatcher] match automático falhou: %v", err)
+			}
+		}()
+	}
+
 	return count, nil
 }
+
+// autoMatchTimeout cobre uma rodada inteira de match automático: extração,
+// embeddings, a chamada da LLM e o enfileiramento de todos os disparos. Só o
+// enfileiramento, não a drenagem da fila — o dispatcher usa contexto próprio por
+// envio.
+const autoMatchTimeout = 30 * time.Minute
 
 // ocrMinInterval espaça as chamadas de OCR. O free tier do Gemini são 10
 // requisições por minuto; sem intervalo a rajada toma 429 e todo print falha.

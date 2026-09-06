@@ -8,7 +8,7 @@ import (
 
 func TestRegisterRoutes_CORSPreflight(t *testing.T) {
 	mux := http.NewServeMux()
-	h := RegisterRoutes(mux, nil, nil, nil)
+	h := RegisterRoutes(mux, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/vacancies", nil)
 	rec := httptest.NewRecorder()

@@ -58,6 +58,10 @@ func (m *mockOrchestrator) MatchResume(ctx context.Context, fileB64, fileMime, c
 	return &domain.ProcessResult{Status: "success"}, nil
 }
 
+func (m *mockOrchestrator) MatchStoredProfiles(ctx context.Context) (int, error) {
+	return 0, nil
+}
+
 func (m *mockOrchestrator) ListMatches(ctx context.Context) ([]*domain.MatchRecord, error) {
 	if m.listMatchesFn != nil {
 		return m.listMatchesFn(ctx)

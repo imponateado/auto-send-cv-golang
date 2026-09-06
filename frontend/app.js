@@ -135,6 +135,57 @@ document.getElementById('matchForm').addEventListener('submit', async (e) => {
   });
 });
 
+// ---------- Currículo salvo (match automático) ----------
+document.getElementById('candidateForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const el = document.getElementById('candidateResult');
+  await handle(el, async () => {
+    const file = document.getElementById('candidateFile').files[0];
+    if (!file) throw new Error('Selecione um arquivo PDF');
+    const email = document.getElementById('candidateEmail').value.trim();
+    const phone = document.getElementById('candidatePhone').value.trim();
+    if (!email && !phone) throw new Error('Informe ao menos o e-mail ou o telefone');
+    await api('/api/v1/candidates', {
+      method: 'POST',
+      body: JSON.stringify({
+        file_base64: await fileToBase64(file),
+        email,
+        phone,
+        active: document.getElementById('candidateActive').checked,
+      }),
+    });
+    await loadCandidates();
+  });
+});
+
+async function loadCandidates() {
+  const el = document.getElementById('candidateResult');
+  await handle(el, async () => {
+    const data = await api('/api/v1/candidates');
+    if (!data || !data.length) {
+      renderMsg(el, 'Nenhum currículo salvo', 'info');
+      return;
+    }
+    const rows = data.map((c) => `<tr>
+      <td>${escapeHtml(c.id)}</td>
+      <td>${escapeHtml(c.phone || '-')}</td>
+      <td>${c.active ? 'Sim' : 'Não'}</td>
+      <td><button class="danger candidate-delete-btn" data-id="${escapeHtml(c.id)}">Deletar</button></td>
+    </tr>`).join('');
+    el.innerHTML = `<table><thead><tr><th>ID</th><th>Telefone</th><th>Automático</th><th>Ações</th></tr></thead><tbody>${rows}</tbody></table>`;
+    el.querySelectorAll('.candidate-delete-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        await handle(el, async () => {
+          await api(`/api/v1/candidates/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+          await loadCandidates();
+        });
+      });
+    });
+  });
+}
+
+document.getElementById('candidatesListBtn').addEventListener('click', loadCandidates);
+
 async function loadMatches() {
   const el = document.getElementById('matchesListResult');
   await handle(el, async () => {

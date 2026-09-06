@@ -25,10 +25,11 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// RegisterRoutes registra as rotas de procHandler, credsHandler e groupHandler no
+// RegisterRoutes registra as rotas de procHandler, credsHandler, candHandler e
+// groupHandler no
 // mux, envolvidas em logging/recovery/CORS. Retorna o http.Handler final pronto
 // para ser servido.
-func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler, credsHandler *CredentialsHandler, groupHandler *GroupWatchHandler) http.Handler {
+func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler, credsHandler *CredentialsHandler, candHandler *CandidateHandler, groupHandler *GroupWatchHandler) http.Handler {
 	mux.HandleFunc("POST /api/v1/vacancies/clear", procHandler.Clear)
 	mux.HandleFunc("GET /api/v1/vacancies", procHandler.List)
 	mux.HandleFunc("DELETE /api/v1/vacancies/{id}", procHandler.DeleteVacancy)
@@ -36,6 +37,10 @@ func RegisterRoutes(mux *http.ServeMux, procHandler *ProcessorHandler, credsHand
 	mux.HandleFunc("GET /api/v1/matches", procHandler.ListMatches)
 	mux.HandleFunc("GET /api/v1/matches/{id}", procHandler.GetMatchRecord)
 	mux.HandleFunc("DELETE /api/v1/matches/{id}", procHandler.DeleteMatch)
+
+	mux.HandleFunc("POST /api/v1/candidates", candHandler.SaveProfile)
+	mux.HandleFunc("GET /api/v1/candidates", candHandler.ListProfiles)
+	mux.HandleFunc("DELETE /api/v1/candidates/{id}", candHandler.DeleteProfile)
 
 	mux.HandleFunc("POST /api/v1/credentials", credsHandler.RegisterCredentials)
 	mux.HandleFunc("GET /api/v1/credentials", credsHandler.ListCredentials)
